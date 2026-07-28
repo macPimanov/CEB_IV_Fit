@@ -148,7 +148,9 @@ class IVParamFitter:
         
         # Back up existing Te.txt if it exists
         if Path('Te.txt').exists():
-            Path('Te.txt').rename('Te_old.txt')
+            import datetime
+            timestamp = datetime.datetime.now().strftime('%Y%m%d%H%M%S')
+            Path('Te.txt').rename(f'Te_{timestamp}.txt')
         
         # Normalized constants
         Rsin = (Rn - Ra) / self.constants.NUMBER_OF_SINS_IN_CEB

@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.constants import e, h, k, pi, planck
+from scipy.constants import e, h, k, pi
 
 class PhysicsConstants:
     ME = 9.1093837015e-31
