@@ -1,0 +1,394 @@
+import numpy as np
+import time
+import json
+from pathlib import Path
+from .constants import PhysicsConstants
+from .ceb_numeric_model import CEBNumericModel
+from .utils import Utils
+from .minimization import MinimizationAlgorithms
+
+class IVParamFitter:
+    def __init__(self, config_file=None):
+        self.model = CEBNumericModel()
+        self.constants = PhysicsConstants()
+        self.Iexp = None
+        self.Vexp = None
+        self.Inum = None
+        self.Vnum = None
+        self.par = {}
+        self.to_fit = {}
+        
+        self.amp_constants = self.constants.get_amplifier_constants('AD745')
+        
+        if config_file:
+            self.load_config(config_file)
+        else:
+            self.load_default_parameters()
+    
+    def load_config(self, config_file):
+        config = Utils.load_json_config(config_file)
+        
+        if 'data_file' in config:
+            self.data_file = config['data_file']
+        else:
+            self.data_file = "SPC-CEB_300mK_Triton11-2026.txt"
+        
+        if 'amp_type' in config:
+            self.amp_constants = self.constants.get_amplifier_constants(config['amp_type'])
+        
+        if 'parameters' in config:
+            for param_name, param_data in config['parameters'].items():
+                self.par[param_name] = param_data['value']
+                self.to_fit[param_name] = param_data.get('vary', False)
+            
+            print("Parameters loaded from config:")
+            for param_name, value in self.par.items():
+                print(f"{param_name} = {value:.6f}, to fit = {self.to_fit[param_name]}")
+    
+    def save_config(self, config_file):
+        config = {
+            'data_file': getattr(self, 'data_file', "SPC-CEB_300mK_Triton11-2026.txt"),
+            'amp_type': 'AD745',  # Default, could be stored
+            'parameters': {}
+        }
+        
+        for param_name, value in self.par.items():
+            config['parameters'][param_name] = {
+                'value': float(value),
+                'vary': self.to_fit.get(param_name, False)
+            }
+        
+        Utils.save_json_config(config_file, config)
+    
+    def load_default_parameters(self):
+        default_params = {
+            'Pbg': 0.0,
+            'beta': 0.111,
+            'TephPOW': 5.0,
+            'Vol': 0.02,
+            'Z': 0.5,
+            'Tc': 1.18,
+            'Rn': 11500.0,
+            'Rleak': 40000000.0,
+            'Wt': 0.0001,
+            'tm': 1.0,
+            'ii': 0.0,
+            'Ra': 200.0,
+            'M': 2,
+            'MP': 1,
+            'Tp': 0.19,
+            'F': 14.2,
+            'dF': 0.1,
+            'dVFinVg': 1.1,
+            'dVStartVg': 0.0,
+            'dV': 2e-6
+        }
+        
+        self.par = default_params.copy()
+        self.to_fit = {name: False for name in default_params.keys()}
+        
+        # Mark default fit parameters
+        self.to_fit['beta'] = True
+        self.to_fit['Z'] = True
+        self.to_fit['Tp'] = True
+        
+        print("Default parameters loaded:")
+        for param_name, value in self.par.items():
+            print(f"{param_name} = {value:.6f}, to fit = {self.to_fit[param_name]}")
+    
+    def load_experiment_data(self, filename, remove_offset=False):
+        self.Iexp, self.Vexp = Utils.load_experimental_data(filename, remove_offset)
+        return len(self.Iexp)
+    
+    def __call__(self, param_value, param_name):
+        old_value = self.par[param_name]
+        self.par[param_name] = param_value
+        
+        self.compute_ceb_properties()
+        Irex, Vrex = Utils.resample(self.Iexp, self.Vexp, self.Inum, self.Vnum)
+        
+        result = Utils.chi_sq_der(self.Vnum, self.Inum, Irex)
+        
+        self.par[param_name] = old_value
+        return result
+    
+    def compute_ceb_properties(self):
+        start_time = time.time()
+        
+        # Physical parameters
+        M = float(self.par['M'])  # number of bolometers in series
+        MP = float(self.par['MP'])  # number of bolometers in parallel
+        total_bolometers = M * MP
+        
+        Pbg = self.par['Pbg']  # incoming power [pW]
+        beta = self.par['beta']  # returning power ratio
+        TephPOW = self.par['TephPOW']  # exponent for Te-ph
+        Vol = self.par['Vol']  # volume of absorber [um³]
+        Sigma = self.par['Z']  # heat exchange in normal metal
+        Tc = self.par['Tc']  # critical temperature [K]
+        Rn = self.par['Rn'] * MP / M  # normal resistance per bolometer [Ohm]
+        Rleak = self.par['Rleak'] * MP / M  # leakage resistance per bolometer [Ohm]
+        Wt = self.par['Wt']  # transparency of barrier
+        tm = self.par['tm']  # depairing energy
+        ii = self.par['ii']  # coefficient for Andreev current
+        Ra = self.par['Ra']  # normal resistance of 1 absorber [Ohm]
+        Tph = self.par['Tp']  # phonon temperature [K]
+        F = self.par['F']  # main frequency [GHz]
+        dF = self.par['dF']  # bandwidth [GHz]
+        dVFinVg = self.par['dVFinVg']  # voltage range end [Vg units]
+        dVStartVg = self.par['dVStartVg']  # voltage range start [Vg units]
+        dV = self.par['dV']  # voltage step [V]
+        
+        Te = Tph  # electron temperature to be found [K]
+        Tsin = Tph  # electron temperature in superconductor [K]
+        
+        DeltaT = np.sqrt(1.0 - np.power(Tsin / Tc, 3.2))
+        dPbg = Pbg
+        Delta = self.constants.BCS_INTEGRAL * Tc  # [K]
+        
+        # Back up existing Te.txt if it exists
+        if Path('Te.txt').exists():
+            Path('Te.txt').rename('Te_old.txt')
+        
+        # Normalized constants
+        Rsin = (Rn - Ra) / self.constants.NUMBER_OF_SINS_IN_CEB
+        I0 = 1e9 * (Delta / Rsin * self.constants.K)  # [nA]
+        Vg = Delta * self.constants.K  # [eV]
+        tauSin = Tsin / Delta
+        tauE = Te / Delta
+        
+        # Calculation parameters
+        Vstr = dVStartVg * Vg
+        Vfin = dVFinVg * Vg
+        
+        voltage_steps = int(np.round((Vfin - Vstr) / dV))
+        if voltage_steps == 0:
+            raise ValueError("No voltage steps to do")
+        
+        V = np.linspace(Vstr, Vfin, voltage_steps + 1)
+        
+        I = np.zeros(voltage_steps + 1)
+        I_A = np.zeros(voltage_steps + 1)
+        
+        self.Inum = np.zeros(voltage_steps - 1)
+        self.Vnum = np.zeros(voltage_steps - 1)
+        
+        # Open output files
+        file_noise = open('Noise.txt', 'w')
+        file_Te = open('Te.txt', 'w')
+        file_NEP = open('NEP.txt', 'w')
+        file_G = open('G.txt', 'w')
+        
+        # Write headers
+        file_noise.write(f"Voltage\tNOISEep\tNOISEs\tNOISEa\tNOISE\tNOISEph\tNOISE^2-NOISEph^2\n")
+        file_Te.write(f"Voltage\tCurrent\tIqp\tIand\tV/Rleak\tTe\tTs\tDeltaT\tPeph\tPand\tPleak\tPabs\tPcool\n")
+        file_NEP.write(f"Voltage\tCurrent\tNEPeph\tNEPs\tNEPa\tNEP\tNEPph\tSv\tNEP^2-NEPph^2\n")
+        file_G.write(f"Voltage\tGe\tGnis\n")
+        
+        for voltage_step in range(1, voltage_steps):
+            dT = 0.005
+            
+            tauELower = 0.0
+            tauEUpper = 3.0 / self.constants.BCS_INTEGRAL
+            
+            # Find tauE so that Pheat == NUMBER_OF_SINS_IN_CEB * Pcool
+            for _ in range(15):
+                tauE = (tauELower + tauEUpper) / 2.0
+                
+                I[voltage_step] = self.model.current_integral(DeltaT, V[voltage_step] / Vg, tauSin, tauE) * I0 + 1e9 * (V[voltage_step] / Rleak)  # [nA]
+                I_A[voltage_step] = ii * self.model.and_current(DeltaT, V[voltage_step] / Vg, tauE, Wt, tm) * I0  # [nA]
+                
+                Pe_ph = Sigma * Vol * (np.power(Tph, TephPOW) - np.power(tauE * Delta, TephPOW)) * 1e3  # [pW]
+                Pabs = np.power(I[voltage_step], 2) * Ra * 1e-6  # [pW]
+                Pleak = self.constants.NUMBER_OF_SINS_IN_CEB * np.power(V[voltage_step], 2) / Rleak * 1e12  # [pW]
+                Pand = np.power(I_A[voltage_step] * 1e-3, 2) * Ra + 2.0 * (I_A[voltage_step] * 1e3) * V[voltage_step]  # [pW]
+                
+                Pcool, Ps = self.model.power_cool_integral(DeltaT, V[voltage_step] / Vg, tauSin, tauE)
+                Pcool *= np.power(Vg, 2) / Rsin * 1e12  # [pW]
+                Ps *= np.power(Vg, 2) / Rsin * 1e12  # [pW]
+                
+                Pheat = Pe_ph + Pabs + Pand + dPbg + 2.0 * beta * Ps + Pleak
+                
+                if Pheat < self.constants.NUMBER_OF_SINS_IN_CEB * Pcool:
+                    tauEUpper = tauE
+                else:
+                    tauELower = tauE
+            
+            Te = tauE * Delta
+            
+            self.Inum[voltage_step - 1] = 1e-9 * (I[voltage_step] + I_A[voltage_step]) * MP
+            self.Vnum[voltage_step - 1] = (self.constants.NUMBER_OF_SINS_IN_CEB * V[voltage_step] + 1e-9 * (I[voltage_step] + I_A[voltage_step]) * Ra) * M
+            
+            # Write Te file
+            file_Te.write(f"{self.Vnum[voltage_step - 1]:.6e}\t{self.Inum[voltage_step - 1]:.6e}\t")
+            file_Te.write(f"{1e-9 * I[voltage_step] * MP:.6e}\t{1e-9 * I_A[voltage_step] * MP:.6e}\t")
+            file_Te.write(f"{1e9 * (V[voltage_step] / Rleak) * MP:.6e}\t{Te:.6e}\t{Tsin:.6e}\t")
+            file_Te.write(f"{DeltaT:.6e}\t{Pe_ph:.6e}\t{Pand:.6e}\t{Pleak:.6e}\t{Pabs:.6e}\t{Pcool:.6e}\n")
+            
+            # Calculate NEP and noise parameters
+            dPT = self.model.power_cool_integral(DeltaT, V[voltage_step] / Vg, tauSin, tauE + dT / Delta)[0] - \
+                   self.model.power_cool_integral(DeltaT, V[voltage_step] / Vg, tauSin, tauE - dT / Delta)[0]
+            
+            dPdT = 1e12 * (np.power(Vg, 2) / Rsin) * dPT / (2.0 * dT)  # [pW/K]
+            
+            dIdT = I0 * (self.model.current_integral(DeltaT, V[voltage_step] / Vg, tauSin, tauE + dT / Delta) -
+                       self.model.current_integral(DeltaT, V[voltage_step] / Vg, tauSin, tauE - dT / Delta)) / (2.0 * dT)  # [nA/K]
+            
+            dIdV = I0 * (self.model.current_integral(DeltaT, V[voltage_step + 1] / Vg, tauSin, tauE) +
+                        ii * self.model.and_current(DeltaT, V[voltage_step + 1] / Vg, tauE, Wt, tm) -
+                        self.model.current_integral(DeltaT, V[voltage_step - 1] / Vg, tauSin, tauE) -
+                        ii * self.model.and_current(DeltaT, V[voltage_step - 1] / Vg, tauE, Wt, tm)) / (2.0 * dV)  # [nA/V]
+            
+            dPdV = np.power(Vg, 2) / Rsin * 1e12 * (self.model.power_cool_integral(DeltaT, V[voltage_step + 1] / Vg, tauSin, tauE)[0] -
+                                                    self.model.power_cool_integral(DeltaT, V[voltage_step - 1] / Vg, tauSin, tauE)[0]) / (2.0 * dV)  # [pW/V]
+            
+            G_NIS = dPdT
+            G_e = 5.0 * Sigma * Vol * np.power(Te, 4) * 1e3  # [pW/K]
+            G = G_e + self.constants.NUMBER_OF_SINS_IN_CEB * (G_NIS - dIdT / dIdV * dPdV)  # [pW/K]
+            
+            Sv = -2.0 * dIdT / dIdV / G / MP  # [V/pW], for 1 bolo
+            
+            NEPe_ph2 = 10.0 * self.constants.E * self.constants.K * Sigma * Vol * (np.power(Tph, TephPOW) + np.power(Te, TephPOW)) * 1e3 * 1e12  # [pW²/Hz]
+            
+            NoiA = np.power(self.amp_constants['voltage_noise'] * np.sqrt(2), 2) + np.power(
+                self.amp_constants['current_noise'] / np.sqrt(2) * (2.0 * 1e9 / dIdV + Ra) * M / MP, 2)  # [V²/Hz]
+            
+            NEPa = NoiA / np.power(Sv, 2)  # [pW²/Hz]
+            
+            # NEP SIN approximation
+            dI = 1e9 * (2.0 * self.constants.E * np.abs(I[voltage_step]) / np.power(dIdV * Sv, 2))  # [pW²/Hz]
+            dPdI = 1e9 * (2.0 * 2.0 * self.constants.E * Pcool / (dIdV * Sv))  # [pW²/Hz]
+            mm = np.log(np.sqrt(2.0 * np.pi * self.constants.K * Te * Vg) / (2.0 * np.abs(I[voltage_step]) * Rsin * 1e-9))
+            dP = (0.5 + np.power(mm, 2)) * np.power(self.constants.K * Te, 2) * np.abs(I[voltage_step]) * self.constants.E * 1e-9 * 1e24  # [pW²/Hz]
+            
+            NEPs = self.constants.NUMBER_OF_SINS_IN_CEB * (dI - 2.0 * dPdI + dP)  # [pW²/Hz]
+            
+            NEPph = 1e12 * np.sqrt(total_bolometers * 2.0 * (F * 1e9) * (dPbg * 1e-12) * self.constants.H +
+                     np.power((dPbg * 1e-12) * total_bolometers, 2) / (dF * 1e9))  # [pW/sqrt(Hz)]
+            
+            NEP = np.sqrt((NEPe_ph2 + NEPs) * total_bolometers + NEPa + np.power(NEPph, 2))
+            
+            # Write Noise file
+            file_noise.write(f"{(2.0 * V[voltage_step] + 1e-9 * I[voltage_step] * Ra) * M:.6e}\t")
+            file_noise.write(f"{1e9 * np.sqrt(NEPe_ph2 * total_bolometers) * np.abs(Sv):.6e}\t")
+            file_noise.write(f"{1e9 * np.sqrt(NEPs * total_bolometers) * np.abs(Sv):.6e}\t{1e9 * np.sqrt(NoiA):.6e}\t")
+            file_noise.write(f"{1e9 * NEP * np.abs(Sv):.6e}\t{1e9 * NEPph * np.abs(Sv):.6e}\t")
+            file_noise.write(f"{1e9 * np.abs(Sv) * np.sqrt(np.power(NEP, 2) - np.power(NEPph, 2)):.6e}\n")
+            
+            # Write NEP file
+            file_NEP.write(f"{(2.0 * V[voltage_step] + 1e-9 * I[voltage_step] * Ra) * M:.6e}\t")
+            file_NEP.write(f"{1e-9 * I[voltage_step] * MP:.6e}\t{1e-12 * np.sqrt(NEPe_ph2 * total_bolometers):.6e}\t")
+            file_NEP.write(f"{1e-12 * np.sqrt(NEPs * total_bolometers):.6e}\t{1e-12 * np.sqrt(NEPa):.6e}\t")
+            file_NEP.write(f"{1e-12 * NEP:.6e}\t{1e-12 * NEPph:.6e}\t{1e12 * np.abs(Sv):.6e}\t")
+            file_NEP.write(f"{1e-12 * np.sqrt(np.power(NEP, 2) - np.power(NEPph, 2)):.6e}\n")
+            
+            # Write G file
+            file_G.write(f"{(self.constants.NUMBER_OF_SINS_IN_CEB * V[voltage_step] + 1e-9 * I[voltage_step] * Ra) * M:.6e}\t")
+            file_G.write(f"{G_e:.6e}\t{G_NIS:.6e}\n")
+            
+            print(f"{voltage_step:3d}/{voltage_steps - 1:3d}: V:{self.Vnum[voltage_step - 1]:10.6e}\t"
+                  f"I:{self.Inum[voltage_step - 1]:10.6e}\tSv:{1e12 * np.abs(Sv):10.6e}\t"
+                  f"Te:{Te:10.6e}\tNEPs:{1e-12 * np.sqrt(NEPs * total_bolometers):10.6e}\t"
+                  f"NEPt:{1e-12 * NEP:10.6e}")
+        
+        file_noise.close()
+        file_Te.close()
+        file_NEP.close()
+        file_G.close()
+        
+        print(f"Time spent: {time.time() - start_time:.2f} seconds")
+        return voltage_steps - 1
+    
+    def resample(self):
+        return Utils.resample(self.Iexp, self.Vexp, self.Inum, self.Vnum)
+    
+    def sequential_fit(self, run_count=3):
+        """Perform sequential fitting using golden section method"""
+        import random
+        
+        write_convergence(self.par.get('beta', 0), self._compute_current_chi_sq(), time.time())
+        
+        par_seq = [name for name, fit in self.to_fit.items() if fit]
+        random.shuffle(par_seq)
+        
+        for run in range(run_count):
+            print(f"SeqFit run {run}")
+            
+            fmin = float('nan')
+            for param_name in par_seq:
+                current_value = self.par[param_name]
+                
+                def objective(param_value):
+                    return self(param_value, param_name)
+                
+                lower_bound = 0.5 * current_value
+                upper_bound = 2.0 * current_value
+                
+                optimal_value, fmin = MinimizationAlgorithms.golden_section_minimization(
+                    objective, lower_bound, upper_bound, tolerance=1e-3
+                )
+                
+                self.par[param_name] = optimal_value
+                print(f"  {param_name}: {current_value:.6e} -> {optimal_value:.6e}, fmin = {fmin:.6e}")
+            
+            # Save results
+            self._save_fit_results(fmin)
+    
+    def lmfit_sequential_fit(self, run_count=3):
+        """Perform sequential fitting using lmfit"""
+        import random
+        from lmfit import Parameters, minimize as lmfit_minimize
+        
+        def lmfit_objective(params, names_to_fit):
+            for name in names_to_fit:
+                self.par[name] = params[name].value
+            
+            self.compute_ceb_properties()
+            Irex, Vrex = self.resample()
+            return Utils.chi_sq_der(self.Vnum, self.Inum, Irex)
+        
+        par_seq = [name for name, fit in self.to_fit.items() if fit]
+        random.shuffle(par_seq)
+        
+        for run in range(run_count):
+            print(f"LMFIT SeqFit run {run}")
+            
+            params = Parameters()
+            for name in par_seq:
+                params.add(name, value=self.par[name], vary=True, 
+                          min=0.5 * self.par[name], max=2.0 * self.par[name])
+            
+            result = lmfit_minimize(lmfit_objective, params, args=(par_seq,))
+            
+            for name in par_seq:
+                self.par[name] = result.params[name].value
+            
+            fmin = result.chisqr
+            print(f"  Final chi-square: {fmin:.6e}")
+            
+            # Save results
+            self._save_fit_results(fmin)
+    
+    def _compute_current_chi_sq(self):
+        if self.Inum is None or self.Vnum is None:
+            self.compute_ceb_properties()
+        Irex, Vrex = self.resample()
+        return Utils.chi_sq_der(self.Vnum, self.Inum, Irex)
+    
+    def _save_fit_results(self, fmin):
+        append_newline = Path('fitparameters_new.txt').exists() and Path('fitparameters_new.txt').stat().st_size > 0
+        
+        with open('fitparameters_new.txt', 'a') as params:
+            if append_newline:
+                params.write('\n')
+            params.write(f"time = {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            for param_name, param_value in self.par.items():
+                fit_status = "fit" if self.to_fit.get(param_name, False) else "skip"
+                params.write(f"{param_name} = {param_value} ({fit_status})\n")
+            params.write(f"fmin = {fmin}\n")
+
+def write_convergence(x, f, start_time):
+    print(f"\nCURRENT XMIN = {x:.6e}\tCHISQMIN = {f:.6e}")
+    
+    with open('converg.txt', 'a') as conv:
+        conv.write(f"{x}\t{f}\t{time.time() - start_time:.6f}\n")
