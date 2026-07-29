@@ -19,6 +19,29 @@ add_executable(CEB_IV_Fit main.cpp
 
 target_link_libraries(CEB_IV_Fit Threads::Threads)
 
+# Create shared library for Python bindings
+add_library(ceb_library SHARED
+        ceb_library.cpp
+        ceb_library.h
+        constants.h
+        CEBNumericModel.h
+        MinimizationAlgorithms.cpp
+        MinimizationAlgorithms.h
+        OffsetEliminator.cpp
+        OffsetEliminator.h
+        utils.cpp
+        utils.h
+)
+
+target_link_libraries(ceb_library Threads::Threads)
+
+# Set output directory for the shared library
+set_target_properties(ceb_library PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/python"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/python"
+        POSITION_INDEPENDENT_CODE ON
+)
+
 include(GNUInstallDirs)
 install(TARGETS CEB_IV_Fit
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}

@@ -7,8 +7,14 @@ from .ceb_numeric_model import CEBNumericModel
 from .utils import Utils
 from .minimization import MinimizationAlgorithms
 
+try:
+    from .ceb_bindings import compute_ceb_properties_threaded
+    HAS_CPP_BACKEND = True
+except ImportError:
+    HAS_CPP_BACKEND = False
+
 class IVParamFitter:
-    def __init__(self, config_file=None):
+    def __init__(self, config_file=None, use_cpp_backend=True, display=False):
         self.model = CEBNumericModel()
         self.constants = PhysicsConstants()
         self.Iexp = None
@@ -19,11 +25,117 @@ class IVParamFitter:
         self.to_fit = {}
         
         self.amp_constants = self.constants.get_amplifier_constants('AD745')
+        self.use_cpp_backend = use_cpp_backend and HAS_CPP_BACKEND
+        self.display = display
+        
+        # Initialize display system
+        self.fig = None
+        self.ax = None
+        self.line_exp = None
+        self.line_num = None
+        self.eval_count = 0
+        
+        if self.display:
+            self._setup_display()
+        
+        if self.use_cpp_backend:
+            print("Using C++ threaded backend for CEB computation")
+        elif use_cpp_backend and not HAS_CPP_BACKEND:
+            print("Warning: C++ backend requested but not available, using pure Python")
         
         if config_file:
             self.load_config(config_file)
         else:
             self.load_default_parameters()
+    
+    def _setup_display(self):
+        """Setup matplotlib display for fitting visualization."""
+        try:
+            import matplotlib.pyplot as plt
+            
+            # Check if we're in a suitable environment for display
+            import os
+            if os.environ.get('DISPLAY') is None and os.name != 'nt':
+                print("No display available, display disabled")
+                self.display = False
+                self.fig = None
+                self.ax = None
+                return
+            
+            self.fig, self.ax = plt.subplots(figsize=(10, 6))
+            self.line_exp, = self.ax.plot([], [], 'bo-', label='Experimental', markersize=4, alpha=0.7)
+            self.line_num, = self.ax.plot([], [], 'r-', label='Numerical Fit', linewidth=2)
+            self.ax.set_xlabel('Voltage (V)', fontsize=12)
+            self.ax.set_ylabel('Current (A)', fontsize=12)
+            self.ax.set_title('IV Curve Fitting Progress', fontsize=14, fontweight='bold')
+            self.ax.legend(fontsize=10)
+            self.ax.grid(True, alpha=0.3)
+            self.ax.tick_params(labelsize=10)
+            plt.ion()  # Turn on interactive mode
+            plt.tight_layout()
+            
+            # Store reference to pyplot for later use
+            self.plt = plt
+            
+        except ImportError as e:
+            print(f"matplotlib not available ({e}), display disabled")
+            self.display = False
+            self.fig = None
+            self.ax = None
+            self.plt = None
+        except Exception as e:
+            print(f"Error setting up display ({e}), display disabled")
+            self.display = False
+            self.fig = None
+            self.ax = None
+            self.plt = None
+    
+    def _update_display(self, Irex, Vrex):
+        """Update the display with current IV curves."""
+        if not self.display or self.fig is None:
+            return
+        
+        if Irex is None or Vrex is None or self.Inum is None or self.Vnum is None:
+            return
+        
+        try:
+            # Calculate chi-squared for display
+            chi_sq = Utils.chi_sq_der(self.Vnum, self.Inum, Irex)
+            
+            # Update data
+            self.line_exp.set_data(Vrex, Irex)
+            self.line_num.set_data(self.Vnum, self.Inum)
+            
+            # Update axis limits
+            all_v = np.concatenate([Vrex, self.Vnum])
+            all_i = np.concatenate([Irex, self.Inum])
+            
+            self.ax.set_xlim(np.min(all_v) * 0.95, np.max(all_v) * 1.05)
+            self.ax.set_ylim(np.min(all_i) * 0.95, np.max(all_i) * 1.05)
+            
+            # Update plot with chi-squared info
+            title = f'IV Curve Fitting Progress\n'
+            title += f'Evals: {self.eval_count} | χ²: {chi_sq:.6e}'
+            self.ax.set_title(title, fontsize=12, fontweight='bold')
+            self.plt.pause(0.001)  # Small pause to allow GUI update
+            
+        except Exception as e:
+            print(f"Error updating display: {e}")
+    
+    def _close_display(self):
+        """Close the display window."""
+        if not self.display or self.fig is None:
+            return
+        
+        try:
+            if self.plt is not None:
+                self.plt.ioff()  # Turn off interactive mode
+                self.plt.close(self.fig)
+                self.plt = None
+            self.fig = None
+            self.ax = None
+        except Exception as e:
+            print(f"Error closing display: {e}")
     
     def load_config(self, config_file):
         config = Utils.load_json_config(config_file)
@@ -109,10 +221,14 @@ class IVParamFitter:
         
         result = Utils.chi_sq_der(self.Vnum, self.Inum, Irex)
         
+        # Update display if enabled
+        self.eval_count += 1
+        self._update_display(Irex, Vrex)
+        
         self.par[param_name] = old_value
         return result
     
-    def compute_ceb_properties(self):
+    def _compute_ceb_properties_python(self):
         start_time = time.time()
         
         # Physical parameters
@@ -301,12 +417,47 @@ class IVParamFitter:
         print(f"Time spent: {time.time() - start_time:.2f} seconds")
         return voltage_steps - 1
     
+    def compute_ceb_properties(self):
+        """Compute CEB properties using the fastest available backend."""
+        if self.use_cpp_backend and HAS_CPP_BACKEND:
+            return self._compute_ceb_properties_cpp()
+        else:
+            return self._compute_ceb_properties_python()
+    
+    def _compute_ceb_properties_cpp(self):
+        """Use C++ threaded backend for computation."""
+        import time
+        
+        start_time = time.time()
+        
+        # Prepare parameters dictionary for C++ library
+        params = self.par.copy()
+        
+        # Get amplifier noise parameters
+        amp_noise = {
+            'voltage_noise': self.amp_constants['voltage_noise'],
+            'current_noise': self.amp_constants['current_noise']
+        }
+        
+        # Call C++ threaded function
+        result = compute_ceb_properties_threaded(params, amp_noise=amp_noise)
+        
+        # Store results in the IVParamFitter instance
+        self.Inum = result['Inum']
+        self.Vnum = result['Vnum']
+        
+        print(f"Time spent: {result['time_spent']:.2f} seconds")
+        return len(result['Inum']) + 1
+    
     def resample(self):
         return Utils.resample(self.Iexp, self.Vexp, self.Inum, self.Vnum)
     
     def sequential_fit(self, run_count=3):
         """Perform sequential fitting using golden section method"""
         import random
+        
+        # Reset evaluation counter for display
+        self.eval_count = 0
         
         write_convergence(self.par.get('beta', 0), self._compute_current_chi_sq(), time.time())
         
@@ -341,13 +492,21 @@ class IVParamFitter:
         import random
         from lmfit import Parameters, minimize as lmfit_minimize
         
+        # Reset evaluation counter for display
+        self.eval_count = 0
+        
         def lmfit_objective(params, names_to_fit):
             for name in names_to_fit:
                 self.par[name] = params[name].value
             
             self.compute_ceb_properties()
             Irex, Vrex = self.resample()
-            return Utils.chi_sq_der(self.Vnum, self.Inum, Irex)
+            
+            # Update display if enabled
+            self.eval_count += 1
+            self._update_display(Irex, Vrex)
+            
+            return (self.Inum - Irex) * 1e8
         
         par_seq = [name for name, fit in self.to_fit.items() if fit]
         random.shuffle(par_seq)
@@ -362,11 +521,24 @@ class IVParamFitter:
             
             result = lmfit_minimize(lmfit_objective, params, args=(par_seq,))
             
-            for name in par_seq:
-                self.par[name] = result.params[name].value
-            
             fmin = result.chisqr
+            nfev = result.nfev
+            
             print(f"  Final chi-square: {fmin:.6e}")
+            print(f"  Number of function evaluations: {nfev}")
+            print(f"  Fitted parameters with uncertainties:")
+            
+            for name in par_seq:
+                param = result.params[name]
+                value = param.value
+                stderr = param.stderr
+                
+                self.par[name] = value
+                
+                if stderr is not None:
+                    print(f"    {name}: {value:.6e} +/- {stderr:.6e}")
+                else:
+                    print(f"    {name}: {value:.6e} (no uncertainty available)")
             
             # Save results
             self._save_fit_results(fmin)

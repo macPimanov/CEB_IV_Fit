@@ -11,7 +11,10 @@ from python.iv_param_fitter import IVParamFitter
 from python.utils import Utils
 
 def main():
-    parser = argparse.ArgumentParser(description='CEB IV Curve Fitting - Python Implementation')
+    parser = argparse.ArgumentParser(
+        description='CEB IV Curve Fitting - Python Implementation',
+        epilog='Example: python main.py --display --method lmfit --runs 2'
+    )
     parser.add_argument('--config', type=str, default='config.json',
                        help='Path to JSON configuration file')
     parser.add_argument('--data', type=str, 
@@ -24,6 +27,8 @@ def main():
                        help='Remove voltage offset from data')
     parser.add_argument('--save-config', type=str,
                        help='Save current configuration to specified file')
+    parser.add_argument('--display', action='store_true',
+                       help='Display real-time fitting progress with matplotlib (requires matplotlib and display environment)')
     
     args = parser.parse_args()
     
@@ -40,7 +45,7 @@ def main():
         
         # Initialize fitter
         print("Initializing IV Parameter Fitter...")
-        fitter = IVParamFitter(config_file=args.config)
+        fitter = IVParamFitter(config_file=args.config, display=args.display)
         
         # Override data file if specified
         if args.data:
@@ -84,12 +89,33 @@ def main():
         
         elapsed_time = time.time() - start_time
         print(f"\nFinished. Total time: {elapsed_time:.2f} seconds")
+        
+        # Handle display cleanup
+        if args.display:
+            print("Display window will remain open until closed manually.")
+            print("Press Ctrl+C or close the window to exit.")
+            try:
+                import matplotlib.pyplot as plt
+                plt.show(block=True)
+            except KeyboardInterrupt:
+                print("\nInterrupted by user")
+            finally:
+                fitter._close_display()
+        
         return 0
         
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         import traceback
         traceback.print_exc()
+        
+        # Clean up display if still active
+        try:
+            if 'fitter' in locals() and 'args' in locals() and getattr(args, 'display', False):
+                fitter._close_display()
+        except:
+            pass
+        
         return 1
 
 if __name__ == "__main__":
