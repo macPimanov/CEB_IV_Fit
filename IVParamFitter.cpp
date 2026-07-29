@@ -6,6 +6,7 @@
 #include <numeric>
 #include <random>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "constants.h"
@@ -14,6 +15,182 @@
 #include "MinimizationAlgorithms.h"
 
 #include "IVParamFitter.h"
+
+struct IterationInput {
+    size_t voltageStep;
+    double DeltaT;
+    double tauSin;
+    double Delta;
+    double Vg;
+    double Rsin;
+    double Rabs;
+    double Rleak;
+    double I0;
+    double Sigma;
+    double Vol;
+    double TephPOW;
+    double Tph;
+    double Tc;
+    double Wt;
+    double tm;
+    double ii;
+    double dT;
+    double dV;
+    double bolometersInSeries;
+    double bolometersInParallel;
+    double beta;
+    double dPbg;
+    double FREQUENCY;
+    double BANDWIDTH;
+    double totalBolometersNumber;
+    std::valarray<double>* V;
+};
+
+struct IterationResult {
+    size_t voltageStep;
+    double Vnum;
+    double Inum;
+    double I;
+    double I_A;
+    double V;
+    double Te;
+    double Tsin;
+    double DeltaT;
+    double Pe_ph;
+    double Pand;
+    double Pleak;
+    double Pabs;
+    double Pcool;
+    double NEPe_ph2;
+    double NEPs;
+    double NoiA;
+    double NEPph;
+    double NEP;
+    double Sv;
+    double G_e;
+    double G_NIS;
+};
+
+IterationResult computeIteration(const IterationInput& input) {
+    IterationResult result{};
+
+    constexpr double dT = 0.005;
+
+    double Pe_ph, Pabs, Pleak, Pcool, Ps, Pand;
+    double tauELower = 0.0;
+    double tauEUpper = 3.0 / BCS_INTEGRAL;
+    double tauE;
+    double I, I_A;
+
+    for (size_t l = 0; l < 15; ++l) {
+        tauE = (tauELower + tauEUpper) / 2.0;
+
+        I = currentIntegral(input.DeltaT, (*input.V)[input.voltageStep] / input.Vg, input.tauSin, tauE) * input.I0
+            + 1e9 * ((*input.V)[input.voltageStep] / input.Rleak);
+
+        I_A = input.ii * AndCurrent(input.DeltaT, (*input.V)[input.voltageStep] / input.Vg, tauE, input.Wt, input.tm) * input.I0;
+
+        Pe_ph = input.Sigma * input.Vol
+            * (std::pow(input.Tph, input.TephPOW) - std::pow(tauE * input.Delta, input.TephPOW)) * 1e3;
+
+        Pabs = std::pow(I, 2) * input.Rabs * 1e-6;
+
+        Pleak = NUMBER_OF_SINS_IN_CEB * std::pow((*input.V)[input.voltageStep], 2) / input.Rleak * 1e12;
+
+        Pand = std::pow(I_A * 1e-3, 2) * input.Rabs + 2.0 * (I_A * 1e3) * (*input.V)[input.voltageStep];
+
+        std::tie(Pcool, Ps) = PowerCoolInt(input.DeltaT, (*input.V)[input.voltageStep] / input.Vg, input.tauSin, tauE);
+
+        Pcool *= std::pow(input.Vg, 2) / input.Rsin * 1e12;
+        Ps *= std::pow(input.Vg, 2) / input.Rsin * 1e12;
+
+        const double Pheat = Pe_ph + Pabs + Pand + input.dPbg + 2.0 * input.beta * Ps + Pleak;
+        if (Pheat < NUMBER_OF_SINS_IN_CEB * Pcool) {
+            tauEUpper = tauE;
+        } else {
+            tauELower = tauE;
+        }
+    }
+
+    const double Te = tauE * input.Delta;
+
+    result.Inum = 1e-9 * (I + I_A) * input.bolometersInParallel;
+    result.Vnum = (NUMBER_OF_SINS_IN_CEB * (*input.V)[input.voltageStep] + 1e-9 * (I + I_A) * input.Rabs) * input.bolometersInSeries;
+
+    result.Vnum = result.Vnum;
+    result.Inum = result.Inum;
+    result.I = I;
+    result.I_A = I_A;
+    result.V = (*input.V)[input.voltageStep];
+    result.Te = Te;
+    result.Tsin = input.Tph;
+    result.DeltaT = input.DeltaT;
+    result.Pe_ph = Pe_ph;
+    result.Pand = Pand;
+    result.Pleak = Pleak;
+    result.Pabs = Pabs;
+    result.Pcool = Pcool;
+    result.voltageStep = input.voltageStep;
+
+    const double dPT = std::get<0>(PowerCoolInt(input.DeltaT, (*input.V)[input.voltageStep] / input.Vg, input.tauSin, tauE + dT / input.Delta))
+        - std::get<0>(PowerCoolInt(input.DeltaT, (*input.V)[input.voltageStep] / input.Vg, input.tauSin, tauE - dT / input.Delta));
+
+    const double dPdT = 1e12 * (std::pow(input.Vg, 2) / input.Rsin) * dPT / (2.0 * dT);
+
+    const double dIdT = input.I0
+        * (currentIntegral(input.DeltaT, (*input.V)[input.voltageStep] / input.Vg, input.tauSin, tauE + dT / input.Delta)
+           - currentIntegral(input.DeltaT, (*input.V)[input.voltageStep] / input.Vg, input.tauSin, tauE - dT / input.Delta))
+        / (2.0 * dT);
+
+    const double dIdV = input.I0
+        * (currentIntegral(input.DeltaT, (*input.V)[input.voltageStep + 1] / input.Vg, input.tauSin, tauE)
+           + input.ii * AndCurrent(input.DeltaT, (*input.V)[input.voltageStep + 1] / input.Vg, tauE, input.Wt, input.tm)
+           - currentIntegral(input.DeltaT, (*input.V)[input.voltageStep - 1] / input.Vg, input.tauSin, tauE)
+           - input.ii * AndCurrent(input.DeltaT, (*input.V)[input.voltageStep - 1] / input.Vg, tauE, input.Wt, input.tm))
+        / (2.0 * input.dV);
+
+    const double dPdV = std::pow(input.Vg, 2) / input.Rsin * 1e12
+        * (std::get<0>(PowerCoolInt(input.DeltaT, (*input.V)[input.voltageStep + 1] / input.Vg, input.tauSin, tauE))
+           - std::get<0>(PowerCoolInt(input.DeltaT, (*input.V)[input.voltageStep - 1] / input.Vg, input.tauSin, tauE)))
+        / (2.0 * input.dV);
+
+    const double G_NIS = dPdT;
+    const double G_e = 5.0 * input.Sigma * input.Vol * std::pow(Te, 4) * 1e3;
+    const double G = G_e + NUMBER_OF_SINS_IN_CEB * (G_NIS - dIdT / dIdV * dPdV);
+    const double Sv = -2.0 * dIdT / dIdV / G / input.bolometersInParallel;
+
+    const double NEPe_ph2 = 10.0 * (E * K) * input.Sigma * input.Vol * (std::pow(input.Tph, input.TephPOW) + std::pow(Te, input.TephPOW)) * 1e3 * 1e12;
+
+    const double NoiA = std::pow(VOLTAGE_NOISE_2_AMPS, 2)
+        + std::pow(CURRENT_NOISE_2_AMPS * (2.0 * 1e9 / dIdV + input.Rabs) * input.bolometersInSeries / input.bolometersInParallel, 2);
+
+    const double NEPa = NoiA / std::pow(Sv, 2);
+
+    const double dI = 1e9 * (2.0 * E * std::abs(I) / std::pow(dIdV * Sv, 2));
+
+    const double dPdI = 1e9 * (2.0 * 2.0 * E * Pcool / (dIdV * Sv));
+
+    const double mm = std::log(std::sqrt(2.0 * M_PI * K * Te * input.Vg) / (2.0 * std::abs(I) * input.Rsin * 1e-9));
+
+    const double dP = (0.5 + std::pow(mm, 2)) * std::pow(K * Te, 2) * std::abs(I) * E * 1e-9 * 1e24;
+
+    const double NEPs = NUMBER_OF_SINS_IN_CEB * (dI - 2.0 * dPdI + dP);
+
+    const double NEPph = 1e12 * std::sqrt(input.totalBolometersNumber * 2.0 * (input.FREQUENCY * 1e9) * (input.dPbg * 1e-12) * H + std::pow((input.dPbg * 1e-12) * input.totalBolometersNumber, 2) / (input.BANDWIDTH * 1e9));
+
+    const double NEP = std::sqrt((NEPe_ph2 + NEPs) * input.totalBolometersNumber + NEPa + std::pow(NEPph, 2));
+
+    result.NEPe_ph2 = NEPe_ph2;
+    result.NEPs = NEPs;
+    result.NoiA = NoiA;
+    result.NEPph = NEPph;
+    result.NEP = NEP;
+    result.Sv = Sv;
+    result.G_e = G_e;
+    result.G_NIS = G_NIS;
+
+    return result;
+}
 
 IVParamFitter::IVParamFitter() {
     /*
@@ -265,208 +442,116 @@ size_t IVParamFitter::computeCEBProperties() {
     std::valarray<double> I(voltageStepsCount + 1);
     std::valarray<double> I_A(voltageStepsCount + 1);
 
-    for (size_t voltageStep = 1; voltageStep < voltageStepsCount; ++voltageStep) // next voltage; exclude edges
-    {
-        constexpr double dT = 0.005; // temperature step for derivative calculations
+    std::vector<IterationResult> results(voltageStepsCount - 1);
+    std::vector<std::thread> threads;
+    const size_t numThreads = std::thread::hardware_concurrency();
 
-        double Pe_ph, Pabs, Pleak, Pcool, Ps, Pand; // for power
+    IterationInput baseInput{
+        .DeltaT = DeltaT,
+        .tauSin = tauSin,
+        .Delta = Delta,
+        .Vg = Vg,
+        .Rsin = Rsin,
+        .Rabs = Rabs,
+        .Rleak = Rleak,
+        .I0 = I0,
+        .Sigma = Sigma,
+        .Vol = Vol,
+        .TephPOW = TephPOW,
+        .Tph = Tph,
+        .Tc = Tc,
+        .Wt = Wt,
+        .tm = tm,
+        .ii = ii,
+        .dT = 0.005,
+        .dV = dV,
+        .bolometersInSeries = bolometersInSeries,
+        .bolometersInParallel = bolometersInParallel,
+        .beta = beta,
+        .dPbg = dPbg,
+        .FREQUENCY = FREQUENCY,
+        .BANDWIDTH = BANDWIDTH,
+        .totalBolometersNumber = totalBolometersNumber,
+        .V = &V
+    };
 
-        // for (size_t n = 0; n < 5; ++n) // next interation
-        // {
-        double tauELower = 0.0; // dimentionless
-        double tauEUpper = 3.0 / BCS_INTEGRAL; // dimentionless
+    for (size_t i = 0; i < voltageStepsCount - 1; ++i) {
+        threads.emplace_back([i, &baseInput, &results]() {
+            IterationInput input = baseInput;
+            input.voltageStep = i + 1;
+            results[i] = computeIteration(input);
+        });
 
-        // find tauE so that Pheat == NUMBER_OF_SINS_IN_CEB * Pcool
-        for (size_t l = 0; l < 15; ++l)
-        // next iteration; TODO: check with Leonid's old version to see how this is different from `n` above
-        {
-            tauE = (tauELower + tauEUpper) / 2.0;
-
-            I[voltageStep] = currentIntegral(DeltaT, V[voltageStep] / Vg, tauSin, tauE) * I0 + 1e9 * (V[voltageStep] / Rleak); // [nA]
-
-//            I[voltageStep] = current( V[voltageStep] / Vg, tauE) * I0 + 1e9 * (V[voltageStep] / Rleak); // [nA]
-
-
-
-            I_A[voltageStep] = ii * AndCurrent(DeltaT, V[voltageStep] / Vg, tauE, Wt, tm) * I0; // [nA]
-
-            Pe_ph = Sigma * Vol
-                                 * (std::pow(Tph, TephPOW)
-                                    - std::pow(tauE * Delta, TephPOW))
-                                 * 1e3; // [pW]
-
-            Pabs = std::pow(I[voltageStep], 2) * Rabs * 1e-6; // [pW]
-
-            Pleak = NUMBER_OF_SINS_IN_CEB * std::pow(V[voltageStep], 2) / Rleak * 1e12; // [pW]
-
-            Pand = std::pow(I_A[voltageStep] * 1e-3 /*[uA]*/, 2) * Rabs /*[Ohm]*/
-                   + 2.0/*TODO*/ * (I_A[voltageStep] * 1e3) /*[pA]*/ * V[voltageStep] /*[V]*/;
-            // [pW], absorber + Andreev
-
-            std::tie(Pcool, Ps) = PowerCoolInt(DeltaT, V[voltageStep] / Vg, tauSin, tauE);
-
-            Pcool *= std::pow(Vg, 2) / Rsin * 1e12; // [pW]
-            Ps *= std::pow(Vg, 2) / Rsin * 1e12; // [pW], returning power from S to N
-
-            if (const double Pheat = Pe_ph + Pabs + Pand + dPbg + 2.0/*TODO*/ * beta * Ps + Pleak;
-                Pheat < NUMBER_OF_SINS_IN_CEB * Pcool) {
-                tauEUpper = tauE;
-            } else {
-                tauELower = tauE;
+        if (threads.size() >= numThreads || i == voltageStepsCount - 2) {
+            for (auto& t : threads) {
+                if (t.joinable()) {
+                    t.join();
+                }
             }
+            threads.clear();
         }
-        // }
+    }
 
-        Te = tauE * Delta;
+    std::ranges::sort(results, [](const auto& a, const auto& b) {
+        return a.voltageStep < b.voltageStep;
+    });
 
-        Inum[voltageStep - 1] = 1e-9 * (I[voltageStep] + I_A[voltageStep]) * bolometersInParallel;
-        Vnum[voltageStep - 1] = (NUMBER_OF_SINS_IN_CEB * V[voltageStep] + 1e-9 * (I[voltageStep] + I_A[voltageStep]) *
-                                 Rabs) * bolometersInSeries;
+    for (const auto& result : results) {
+        I[result.voltageStep] = result.I;
+        I_A[result.voltageStep] = result.I_A;
+
+        Inum[result.voltageStep - 1] = result.Inum;
+        Vnum[result.voltageStep - 1] = result.Vnum;
 
         file_Te
-                << Vnum[voltageStep - 1] << SEP
-                << Inum[voltageStep - 1] << SEP
-                << 1e-9 * I[voltageStep] * bolometersInParallel << SEP
-                << 1e-9 * I_A[voltageStep] * bolometersInParallel << SEP
-                << 1e9 * (V[voltageStep] / Rleak) * bolometersInParallel << SEP
-                << Te << SEP
-                << Tsin << SEP
-                << DeltaT << SEP
-                << Pe_ph << SEP
-                << Pand << SEP
-                << Pleak << SEP
-                << Pabs << SEP
-                << Pcool << std::endl;
-
-        //----- NEP ----------------------------------------------
-
-        const double dPT = std::get<0>(PowerCoolInt(DeltaT, V[voltageStep] / Vg, tauSin, tauE + dT / Delta))
-                           - std::get<0>(PowerCoolInt(DeltaT, V[voltageStep] / Vg, tauSin, tauE - dT / Delta));
-
-        const double dPdT = 1e12 * (std::pow(Vg, 2) / Rsin) * dPT / (2.0 * dT); // [pW/K]
-
-        const double dIdT = I0
-                            * (currentIntegral(DeltaT, V[voltageStep] / Vg, tauSin, tauE + dT / Delta)
-                               - currentIntegral(DeltaT, V[voltageStep] / Vg, tauSin, tauE - dT / Delta))
-                            / (2.0 * dT); // [nA/K]
-
-//        const double dIdT = I0
-//                            * (current( V[voltageStep] / Vg, tauE + dT / Delta)
-//                               - current(V[voltageStep] / Vg, tauE - dT / Delta))
-//                            / (2.0 * dT); // [nA/K]
-
-        const double dIdV = I0
-                            * (currentIntegral(DeltaT, V[voltageStep + 1] / Vg, tauSin, tauE)
-                               + ii * AndCurrent(DeltaT, V[voltageStep + 1] / Vg, tauE, Wt, tm)
-                               - currentIntegral(DeltaT, V[voltageStep - 1] / Vg, tauSin, tauE)
-                               - ii * AndCurrent(DeltaT, V[voltageStep - 1] / Vg, tauE, Wt, tm))
-                            / (2.0 * dV); // [nA/V]
-
-//        const double dIdV = I0
-//                            * (current(V[voltageStep + 1] / Vg, tauE)
-//                               + ii * AndCurrent(DeltaT, V[voltageStep + 1] / Vg, tauE, Wt, tm)
-//                               - current(V[voltageStep - 1] / Vg, tauE)
-//                               - ii * AndCurrent(DeltaT, V[voltageStep - 1] / Vg, tauE, Wt, tm))
-//                            / (2.0 * dV); // [nA/V]
-
-        const double dPdV = std::pow(Vg, 2) / Rsin * 1e12
-                            * (std::get<0>(PowerCoolInt(DeltaT, V[voltageStep + 1] / Vg, tauSin, tauE))
-                               - std::get<0>(PowerCoolInt(DeltaT, V[voltageStep - 1] / Vg, tauSin, tauE)))
-                            / (2.0 * dV); // [pW/V]
-
-        // heat conductance
-        const double G_NIS = dPdT; // after eq. (10)
-        const double G_e = 5.0 * Sigma * Vol * std::pow(Te, 4) * 1e3; // [pW/K], after eq. (10)
-
-        const double G = G_e + NUMBER_OF_SINS_IN_CEB * (G_NIS - dIdT / dIdV * dPdV); // [pW/K]
-
-        // the responsivity in the current biased regime, eq. (30)
-        const double Sv = -2.0 * dIdT / dIdV / G / bolometersInParallel; // [V/pW], for 1 bolo
-
-        // NEPe_ph squared, eq. (24)
-        const double NEPe_ph2 = 10.0 * (E * K) * Sigma * Vol * (std::pow(Tph, TephPOW) + std::pow(Te, TephPOW)) * 1e3
-                                * 1e12; // [pW²/Hz]
-
-        // amplifier noise
-        const double NoiA = std::pow(VOLTAGE_NOISE_2_AMPS, 2)
-                            + std::pow(
-                                CURRENT_NOISE_2_AMPS * (2.0 * 1e9 / dIdV + Rabs) * bolometersInSeries /
-                                bolometersInParallel,
-                                2); // [V²/Hz]
-
-        const double NEPa = NoiA / std::pow(Sv, 2); // [pW²/Hz]
-
-        //----- NEP SIN approximation ----------------------------
-
-        const double dI = 1e9 * (2.0 * E * std::abs(I[voltageStep]) / std::pow(dIdV * Sv, 2)); // [pW²/Hz]
-
-        const double dPdI = 1e9 * (2.0 * 2.0 * E * Pcool / (dIdV * Sv));
-        // [pW²/Hz], second '2' is from comparison with integral
-
-        const double mm =
-                std::log(std::sqrt(2.0 * M_PI * K * Te * Vg) / (2.0 * std::abs(I[voltageStep]) * Rsin * 1e-9));
-
-        const double dP = (0.5 + std::pow(mm, 2)) * std::pow(K * Te, 2) * std::abs(I[voltageStep]) * E * 1e-9
-                          * 1e24; // [pW²/Hz]
-
-        const double NEPs = NUMBER_OF_SINS_IN_CEB * (dI - 2.0 * dPdI + dP); // [pW²/Hz], all terms positive
-
-        //----- NEP SIN integral ---------------------------------
-        /*
-		mm = NEPInt(DeltaT, V[j] / Vg, tau, tauE, &dI, &dP, &dPdI);
-
-		dI = EL * I0 * dI / std::pow(dIdV * Sv, 2) * 1e9;			// [pW²/Hz]
-
-		dPdI = dPdI / (dIdV * Sv) * EL * std::pow(Vg, 2) / Rsin * 1e12 * 1e9;	// [pW²/Hz]
-
-		dP *= std::pow(Vg, 3) / Rsin * EL * 1e24;			// [pW²/Hz]
-
-		NEPs = NUMBER_OF_SINS_IN_CEB * (dI - 2.0 * dPdI + dP);				// [pW²/Hz], all terms positive
-        */
-        //--------------------------------------------------------
-
-        // const double NEPph = 1e-6 * (Pbg * totalBolometersNumber);
-        // [pW/sqrt(Hz)], at 0 GHz
-
-        const double NEPph = 1e12 * std::sqrt(totalBolometersNumber * 2.0 * (FREQUENCY * 1e9) * (dPbg * 1e-12) * H + std::pow((dPbg * 1e-12) * totalBolometersNumber, 2) / (BANDWIDTH * 1e9));	// [pW/sqrt(Hz)]
-
-        const double NEP = std::sqrt((NEPe_ph2 + NEPs) * totalBolometersNumber + NEPa + std::pow(NEPph, 2));
-        //all squares
+                << result.Vnum << SEP
+                << result.Inum << SEP
+                << 1e-9 * result.I * bolometersInParallel << SEP
+                << 1e-9 * result.I_A * bolometersInParallel << SEP
+                << 1e9 * (result.V / Rleak) * bolometersInParallel << SEP
+                << result.Te << SEP
+                << result.Tsin << SEP
+                << result.DeltaT << SEP
+                << result.Pe_ph << SEP
+                << result.Pand << SEP
+                << result.Pleak << SEP
+                << result.Pabs << SEP
+                << result.Pcool << std::endl;
 
         file_Noise
-                << (2.0 * V[voltageStep] + 1e-9 * I[voltageStep] * Rabs) * bolometersInSeries << SEP
-                << 1e9 * std::sqrt(NEPe_ph2 * totalBolometersNumber) * std::abs(Sv) << SEP
-                << 1e9 * std::sqrt(NEPs * totalBolometersNumber) * std::abs(Sv) << SEP
-                << 1e9 * std::sqrt(NoiA) << SEP
-                << 1e9 * NEP * std::abs(Sv) << SEP
-                << 1e9 * NEPph * std::abs(Sv) << SEP
-                << 1e9 * std::abs(Sv) * std::sqrt(std::pow(NEP, 2) - std::pow(NEPph, 2)) << std::endl;
+                << (2.0 * result.V + 1e-9 * result.I * Rabs) * bolometersInSeries << SEP
+                << 1e9 * std::sqrt(result.NEPe_ph2 * totalBolometersNumber) * std::abs(result.Sv) << SEP
+                << 1e9 * std::sqrt(result.NEPs * totalBolometersNumber) * std::abs(result.Sv) << SEP
+                << 1e9 * std::sqrt(result.NoiA) << SEP
+                << 1e9 * result.NEP * std::abs(result.Sv) << SEP
+                << 1e9 * result.NEPph * std::abs(result.Sv) << SEP
+                << 1e9 * std::abs(result.Sv) * std::sqrt(std::pow(result.NEP, 2) - std::pow(result.NEPph, 2)) << std::endl;
 
         file_NEP
-                << (2.0 * V[voltageStep] + 1e-9 * I[voltageStep] * Rabs) * bolometersInSeries << SEP
-                << 1e-9 * I[voltageStep] * bolometersInParallel << SEP
-                << 1e-12 * std::sqrt(NEPe_ph2 * totalBolometersNumber) << SEP
-                << 1e-12 * std::sqrt(NEPs * totalBolometersNumber) << SEP
-                << 1e-12 * std::sqrt(NEPa) << SEP
-                << 1e-12 * NEP << SEP
-                << 1e-12 * NEPph << SEP
-                << 1e12 * std::abs(Sv) << SEP
-                << 1e-12 * std::sqrt(std::pow(NEP, 2) - std::pow(NEPph, 2)) << std::endl;
+                << (2.0 * result.V + 1e-9 * result.I * Rabs) * bolometersInSeries << SEP
+                << 1e-9 * result.I * bolometersInParallel << SEP
+                << 1e-12 * std::sqrt(result.NEPe_ph2 * totalBolometersNumber) << SEP
+                << 1e-12 * std::sqrt(result.NEPs * totalBolometersNumber) << SEP
+                << 1e-12 * std::sqrt(result.NoiA) << SEP
+                << 1e-12 * result.NEP << SEP
+                << 1e-12 * result.NEPph << SEP
+                << 1e12 * std::abs(result.Sv) << SEP
+                << 1e-12 * std::sqrt(std::pow(result.NEP, 2) - std::pow(result.NEPph, 2)) << std::endl;
 
         file_G
-                << (NUMBER_OF_SINS_IN_CEB * V[voltageStep] + 1e-9 * (I[voltageStep] * Rabs)) * bolometersInSeries << SEP
-                << G_e << SEP
-                << G_NIS << std::endl;
+                << (NUMBER_OF_SINS_IN_CEB * result.V + 1e-9 * (result.I * Rabs)) * bolometersInSeries << SEP
+                << result.G_e << SEP
+                << result.G_NIS << std::endl;
 
         std::clog
-                << std::setw(static_cast<int>(std::ceil(std::log10(voltageStepsCount)))) << voltageStep << '/' <<
+                << std::setw(static_cast<int>(std::ceil(std::log10(voltageStepsCount)))) << result.voltageStep << '/' <<
                 voltageStepsCount - 1 << ':' << ' '
-                << "V:" << std::setw(12) << Vnum[voltageStep - 1] << SEP
-                << "I:" << std::setw(12) << Inum[voltageStep - 1] << SEP
-                << "Sv:" << std::setw(12) << 1e12 * std::abs(Sv) << SEP
-                << "Te:" << std::setw(12) << Te << SEP
-                << "NEPs:" << std::setw(12) << 1e-12 * std::sqrt(NEPs * totalBolometersNumber) << SEP
-                << "NEPt:" << std::setw(12) << 1e-12 * NEP << std::endl;
+                << "V:" << std::setw(12) << result.Vnum << SEP
+                << "I:" << std::setw(12) << result.Inum << SEP
+                << "Sv:" << std::setw(12) << 1e12 * std::abs(result.Sv) << SEP
+                << "Te:" << std::setw(12) << result.Te << SEP
+                << "NEPs:" << std::setw(12) << 1e-12 * std::sqrt(result.NEPs * totalBolometersNumber) << SEP
+                << "NEPt:" << std::setw(12) << 1e-12 * result.NEP << std::endl;
     }
 
     file_Noise.close();
