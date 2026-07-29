@@ -1,5 +1,5 @@
 # Veusz saved document (version 3.6.2)
-# Saved at 2026-03-25T12:34:04.265344
+# Saved at 2026-05-18T12:36:28.223792
 
 SetCompatLevel(1)
 AddImportPath('D:\\CLionProjects\\CEB_IV_Fit')
@@ -11,6 +11,7 @@ ImportFileCSV('SPC-CEB_250mK_Triton11-2026_14dBm.txt', delimiter='\t', headermod
 ImportFileCSV('SPC-CEB_250mK_Triton11-2026_16dBm.txt', delimiter='\t', headermode='none', linked=True, dssuffix=' SPC-CEB_250mK_Triton11-2026_16dBm.txt')
 ImportFileCSV('SPC-CEB_250mK_Triton11-2026_18dBm.txt', delimiter='\t', headermode='none', linked=True, dssuffix=' SPC-CEB_250mK_Triton11-2026_18dBm.txt')
 ImportFileCSV('SPC-CEB_250mK_Triton11-2026_8dBm.txt', delimiter='\t', headermode='none', linked=True, dssuffix=' SPC-CEB_250mK_Triton11-2026_8dBm.txt')
+ImportFileCSV('SPC-CEB_300mK_Triton11-2026.txt', delimiter='\t', headermode='none', linked=True, dssuffix=' SPC-CEB_300mK_Triton11-2026.txt')
 Set('width', '26cm')
 Set('height', '24.6cm')
 Set('colorTheme', 'black')
@@ -83,6 +84,12 @@ To('xy8')
 Set('color', '#aaaa00')
 Set('xData', 'col1 SPC-CEB_250mK_Triton11-2026_18dBm.txt')
 Set('yData', 'col2 SPC-CEB_250mK_Triton11-2026_18dBm.txt')
+To('..')
+Add('xy', name='xy9', autoadd=False)
+To('xy9')
+Set('color', 'black')
+Set('xData', 'col1 SPC-CEB_300mK_Triton11-2026.txt')
+Set('yData', 'col2 SPC-CEB_300mK_Triton11-2026.txt')
 To('..')
 To('..')
 To('..')

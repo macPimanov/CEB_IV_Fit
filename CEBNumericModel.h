@@ -31,7 +31,7 @@ double current(const ScalarLike& v, const double tau) {
     // [delta(0) / eRn]
     return s * std::sqrt(2.0 * M_PI * a1 / a2 + a3)
            * (1.0 / (2.0 * std::exp((1.0 - v) / tau) + 1.0)
-              + 1.0 / (2.0 * std::exp((1.0 + v) / tau) + 1.0));
+              - 1.0 / (2.0 * std::exp((1.0 + v) / tau) + 1.0));
 }
 
 template<class ScalarLike>
@@ -57,7 +57,7 @@ double currentIntegral(const double DT, const ScalarLike& v, const double tau, c
 
     double x = DT + dx; // energy
     while (x <= inf) {
-        constexpr double accuracy = 1e-6;
+        constexpr double accuracy = 1e-15;
         const double a2 = std::sqrt(std::pow(x, 2) - DT2);
         ScalarLike a0;
         double a1;

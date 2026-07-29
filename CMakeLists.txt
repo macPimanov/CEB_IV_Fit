@@ -13,9 +13,6 @@ add_executable(CEB_IV_Fit main.cpp
         IVParamFitter.h IVParamFitter.cpp
         OffsetEliminator.h OffsetEliminator.cpp
         MinimizationAlgorithms.h MinimizationAlgorithms.cpp
-        README.md
-        SINS1_53_240_303_mK.txt
-        startparams.txt
 )
 
 include(GNUInstallDirs)

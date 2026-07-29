@@ -8,7 +8,7 @@
  *  Format: two columns (voltage (V), current(A)).
  *  Decimal delimiter: .
  */
-const std::string DATA_FILE_NAME = "SINS1_53_240_303_mK.txt";
+const std::string DATA_FILE_NAME = "SPC-CEB_300mK_Triton11-2026.txt";
 
 // CSV file delimiter
 constexpr char SEP = '\t';
@@ -38,9 +38,10 @@ constexpr double E = 1.602176634e-19; // exact,                [C]
 constexpr double H = 6.62607015e-34; // exact,                 [J / Hz]
 constexpr double HBAR = H / (2.0 * M_PI); //                   [J / Hz]
 constexpr double K = 1.380649e-23 / E; // exact,               [eV / K]
-
+// DELTA = 2.78e-23 -> Tc = 1.14
+// Rn = 2.24e3 // per 1 SIN
 // coefficient follows from BCS theory (TODO: check for which metals)
-constexpr double BCS_INTEGRAL = 1.764; // TODO: source?
+constexpr double BCS_INTEGRAL = 1.764; // TODO: source? BASE VALUE: 1.764
 
 #define THREADS 56
 
@@ -69,7 +70,7 @@ constexpr auto NUMBER_OF_SINS_IN_CEB = 2.0;
 #ifndef AMPLIFIER
 #   error "Undefined amplifier"
 #elif AMPLIFIER == AD745
-constexpr double VOLTAGE_NOISE = 3.2e-9; // [V/sqrt(Hz)]
+constexpr double VOLTAGE_NOISE = 1.0e-8; // [V/sqrt(Hz)]
 constexpr double CURRENT_NOISE = 6.9e-15; // [A/sqrt(Hz)]
 #elif AMPLIFIER == OPA111
 constexpr double VOLTAGE_NOISE = 8.0e-9; // [V/sqrt(Hz)]

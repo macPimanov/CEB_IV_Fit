@@ -151,6 +151,10 @@ size_t IVParamFitter::computeCEBProperties() {
     const double Rabs = par["Ra"];
     // phonon temperature [K]
     const double Tph = par["Tp"];
+    // main frequency [GHz]
+    const double FREQUENCY = par["F"];
+    // bandwidth [GHz]
+    const double BANDWIDTH = par["dF"];
     // voltage range end [V]
     const double dVFinVg = par["dVFinVg"];
     // voltage range start [V]
@@ -165,9 +169,9 @@ size_t IVParamFitter::computeCEBProperties() {
 
     const double DeltaT = std::sqrt(1.0 - std::pow(Tsin / Tc, 3.2));
     // incoming power per 1 bolometer [pW]
-    const double dPbg = Pbg / totalBolometersNumber;
+    const double dPbg = Pbg /*/ totalBolometersNumber*/;
     // energy gap [K], Vg[eV] = Tc * BCS_INTEGRAL * 86.25e-6
-    const double Delta = BCS_INTEGRAL * Tc; // [K]
+    const double Delta = (BCS_INTEGRAL * Tc); // [K]
 
     // if there is a file named “Te.txt”, backup its content into “Te_old.txt”
     if (std::filesystem::exists("Te.txt")) {
@@ -238,6 +242,7 @@ size_t IVParamFitter::computeCEBProperties() {
             << "Te" << SEP
             << "Ts" << SEP
             << "DeltaT" << SEP
+            << "Peph" << SEP
             << "Pand" << SEP
             << "Pleak" << SEP
             << "Pabs" << SEP
@@ -264,7 +269,7 @@ size_t IVParamFitter::computeCEBProperties() {
     {
         constexpr double dT = 0.005; // temperature step for derivative calculations
 
-        double Pabs, Pleak, Pcool, Ps, Pand; // for power
+        double Pe_ph, Pabs, Pleak, Pcool, Ps, Pand; // for power
 
         // for (size_t n = 0; n < 5; ++n) // next interation
         // {
@@ -277,12 +282,15 @@ size_t IVParamFitter::computeCEBProperties() {
         {
             tauE = (tauELower + tauEUpper) / 2.0;
 
-            I[voltageStep] = currentIntegral(DeltaT, V[voltageStep] / Vg, tauSin, tauE) * I0 + 1e9 * (
-                                 V[voltageStep] / Rleak); // [nA]
+            I[voltageStep] = currentIntegral(DeltaT, V[voltageStep] / Vg, tauSin, tauE) * I0 + 1e9 * (V[voltageStep] / Rleak); // [nA]
+
+//            I[voltageStep] = current( V[voltageStep] / Vg, tauE) * I0 + 1e9 * (V[voltageStep] / Rleak); // [nA]
+
+
 
             I_A[voltageStep] = ii * AndCurrent(DeltaT, V[voltageStep] / Vg, tauE, Wt, tm) * I0; // [nA]
 
-            const double Pe_ph = Sigma * Vol
+            Pe_ph = Sigma * Vol
                                  * (std::pow(Tph, TephPOW)
                                     - std::pow(tauE * Delta, TephPOW))
                                  * 1e3; // [pW]
@@ -324,6 +332,7 @@ size_t IVParamFitter::computeCEBProperties() {
                 << Te << SEP
                 << Tsin << SEP
                 << DeltaT << SEP
+                << Pe_ph << SEP
                 << Pand << SEP
                 << Pleak << SEP
                 << Pabs << SEP
@@ -341,12 +350,24 @@ size_t IVParamFitter::computeCEBProperties() {
                                - currentIntegral(DeltaT, V[voltageStep] / Vg, tauSin, tauE - dT / Delta))
                             / (2.0 * dT); // [nA/K]
 
+//        const double dIdT = I0
+//                            * (current( V[voltageStep] / Vg, tauE + dT / Delta)
+//                               - current(V[voltageStep] / Vg, tauE - dT / Delta))
+//                            / (2.0 * dT); // [nA/K]
+
         const double dIdV = I0
                             * (currentIntegral(DeltaT, V[voltageStep + 1] / Vg, tauSin, tauE)
                                + ii * AndCurrent(DeltaT, V[voltageStep + 1] / Vg, tauE, Wt, tm)
                                - currentIntegral(DeltaT, V[voltageStep - 1] / Vg, tauSin, tauE)
                                - ii * AndCurrent(DeltaT, V[voltageStep - 1] / Vg, tauE, Wt, tm))
                             / (2.0 * dV); // [nA/V]
+
+//        const double dIdV = I0
+//                            * (current(V[voltageStep + 1] / Vg, tauE)
+//                               + ii * AndCurrent(DeltaT, V[voltageStep + 1] / Vg, tauE, Wt, tm)
+//                               - current(V[voltageStep - 1] / Vg, tauE)
+//                               - ii * AndCurrent(DeltaT, V[voltageStep - 1] / Vg, tauE, Wt, tm))
+//                            / (2.0 * dV); // [nA/V]
 
         const double dPdV = std::pow(Vg, 2) / Rsin * 1e12
                             * (std::get<0>(PowerCoolInt(DeltaT, V[voltageStep + 1] / Vg, tauSin, tauE))
@@ -404,10 +425,10 @@ size_t IVParamFitter::computeCEBProperties() {
         */
         //--------------------------------------------------------
 
-        const double NEPph = 1e-6 * (Pbg * totalBolometersNumber);
+        // const double NEPph = 1e-6 * (Pbg * totalBolometersNumber);
         // [pW/sqrt(Hz)], at 0 GHz
 
-        // const double NEPph = 1e12 * std::sqrt(totalBolometersNumber * 2.0 * 1e9 * Pbg * 350.0 * 1e-12 * H + std::pow(1e-12 * Pbg * totalBolometersNumber, 2) / 1.552 / 1e9);	// [pW/sqrt(Hz)], at 350 GHz
+        const double NEPph = 1e12 * std::sqrt(totalBolometersNumber * 2.0 * (FREQUENCY * 1e9) * (dPbg * 1e-12) * H + std::pow((dPbg * 1e-12) * totalBolometersNumber, 2) / (BANDWIDTH * 1e9));	// [pW/sqrt(Hz)]
 
         const double NEP = std::sqrt((NEPe_ph2 + NEPs) * totalBolometersNumber + NEPa + std::pow(NEPph, 2));
         //all squares
@@ -439,13 +460,13 @@ size_t IVParamFitter::computeCEBProperties() {
 
         std::clog
                 << std::setw(static_cast<int>(std::ceil(std::log10(voltageStepsCount)))) << voltageStep << '/' <<
-                voltageStepsCount - 1 << ':' << SEP
-                << "Voltage: " << std::setw(12) << Vnum[voltageStep - 1] << SEP
-                << "Current: " << std::setw(12) << Inum[voltageStep - 1] << SEP
-                << "Sv: " << std::setw(12) << 1e12 * std::abs(Sv) << SEP
-                << "Te: " << std::setw(12) << Te << SEP
-                << "NEPs: " << std::setw(12) << 1e-12 * std::sqrt(NEPs * totalBolometersNumber) << SEP
-                << "NEPt: " << std::setw(12) << 1e-12 * NEP << std::endl;
+                voltageStepsCount - 1 << ':' << ' '
+                << "V:" << std::setw(12) << Vnum[voltageStep - 1] << SEP
+                << "I:" << std::setw(12) << Inum[voltageStep - 1] << SEP
+                << "Sv:" << std::setw(12) << 1e12 * std::abs(Sv) << SEP
+                << "Te:" << std::setw(12) << Te << SEP
+                << "NEPs:" << std::setw(12) << 1e-12 * std::sqrt(NEPs * totalBolometersNumber) << SEP
+                << "NEPt:" << std::setw(12) << 1e-12 * NEP << std::endl;
     }
 
     file_Noise.close();
