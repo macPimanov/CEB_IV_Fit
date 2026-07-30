@@ -27,7 +27,7 @@ CEBLibrary::IterationResult CEBLibrary::computeIteration(const CEBLibrary::Itera
         I = currentIntegral(input.DeltaT, input.V[input.voltageStep] / input.Vg, input.tauSin, tauE) * input.I0
             + 1e9 * (input.V[input.voltageStep] / input.Rleak);
 
-        I_A = input.ii * AndCurrent(input.DeltaT, input.V[input.voltageStep] / input.Vg, tauE, input.Wt, input.tm) * input.I0;
+        I_A = AndCurrent(input.ii, input.DeltaT, input.V[input.voltageStep] / input.Vg, tauE, input.Wt, input.tm) * input.I0;
 
         Pe_ph = input.Sigma * input.Vol
             * (std::pow(input.Tph, input.TephPOW) - std::pow(tauE * input.Delta, input.TephPOW)) * 1e3;
