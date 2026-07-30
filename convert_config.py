@@ -84,10 +84,8 @@ def convert_txt_to_json(txt_file, json_output_file):
     
     # Create full configuration structure
     config = {
-        'data_file': 'SPC-CEB_300mK_Triton11-2026.txt',  # Default, user should update
+        'data_file': 'rename_me.txt',  # Default, user should update
         'amp_type': 'AD745',
-        'sep': '\t',
-        'threads': 56,
         'parameters': parameters
     }
     
@@ -124,7 +122,7 @@ def main():
     
     try:
         convert_txt_to_json(args.input_file, args.output_file)
-        print(f"\nIMPORTANT: Please update the 'data_file' field in {args.output_file} to match your experimental data file.")
+        print(f"\nIMPORTANT: Please update the 'data_file' and 'amp_type' fields in {args.output_file} to match your experimental data file.")
         return 0
     except Exception as e:
         print(f"Error during conversion: {e}")
