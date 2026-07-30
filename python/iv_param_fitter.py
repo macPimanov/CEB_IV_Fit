@@ -31,8 +31,11 @@ class IVParamFitter:
         # Initialize display system
         self.fig = None
         self.ax = None
+        self.ax_lin = None
         self.line_exp = None
         self.line_num = None
+        self.line_exp_lin = None
+        self.line_num_lin = None
         self.eval_count = 0
         
         if self.display:
@@ -60,17 +63,31 @@ class IVParamFitter:
                 self.display = False
                 self.fig = None
                 self.ax = None
+                self.ax_lin = None
                 return
             
-            self.fig, self.ax = plt.subplots(figsize=(10, 6))
+            self.fig, (self.ax, self.ax_lin) = plt.subplots(1, 2, figsize=(14, 6))
+            
+            # Setup log scale subplot (left)
             self.line_exp, = self.ax.plot([], [], 'bo-', label='Experimental', markersize=4, alpha=0.7)
             self.line_num, = self.ax.plot([], [], 'r-', label='Numerical Fit', linewidth=2)
             self.ax.set_xlabel('Voltage (V)', fontsize=12)
             self.ax.set_ylabel('Current (A)', fontsize=12)
-            self.ax.set_title('IV Curve Fitting Progress', fontsize=14, fontweight='bold')
+            self.ax.set_yscale('log')
+            self.ax.set_title('IV Curve Fitting Progress (Log Scale)', fontsize=12, fontweight='bold')
             self.ax.legend(fontsize=10)
             self.ax.grid(True, alpha=0.3)
             self.ax.tick_params(labelsize=10)
+            
+            # Setup linear scale subplot (right)
+            self.line_exp_lin, = self.ax_lin.plot([], [], 'bo-', label='Experimental', markersize=4, alpha=0.7)
+            self.line_num_lin, = self.ax_lin.plot([], [], 'r-', label='Numerical Fit', linewidth=2)
+            self.ax_lin.set_xlabel('Voltage (V)', fontsize=12)
+            self.ax_lin.set_ylabel('Current (A)', fontsize=12)
+            self.ax_lin.set_title('IV Curve Fitting Progress (Linear Scale)', fontsize=12, fontweight='bold')
+            self.ax_lin.legend(fontsize=10)
+            self.ax_lin.grid(True, alpha=0.3)
+            self.ax_lin.tick_params(labelsize=10)
             plt.ion()  # Turn on interactive mode
             plt.tight_layout()
             
@@ -82,12 +99,14 @@ class IVParamFitter:
             self.display = False
             self.fig = None
             self.ax = None
+            self.ax_lin = None
             self.plt = None
         except Exception as e:
             print(f"Error setting up display ({e}), display disabled")
             self.display = False
             self.fig = None
             self.ax = None
+            self.ax_lin = None
             self.plt = None
     
     def _update_display(self, Irex, Vrex):
@@ -102,21 +121,29 @@ class IVParamFitter:
             # Calculate chi-squared for display
             chi_sq = Utils.chi_sq_der(self.Vnum, self.Inum, Irex)
             
-            # Update data
+            # Update data - log scale (left subplot)
             self.line_exp.set_data(Vrex, Irex)
             self.line_num.set_data(self.Vnum, self.Inum)
             
-            # Update axis limits
+            # Update data - linear scale (right subplot)
+            self.line_exp_lin.set_data(Vrex, Irex)
+            self.line_num_lin.set_data(self.Vnum, self.Inum)
+            
+            # Update axis limits - log scale
             all_v = np.concatenate([Vrex, self.Vnum])
             all_i = np.concatenate([Irex, self.Inum])
             
             self.ax.set_xlim(np.min(all_v) * 0.95, np.max(all_v) * 1.05)
             self.ax.set_ylim(np.min(all_i) * 0.95, np.max(all_i) * 1.05)
             
-            # Update plot with chi-squared info
-            title = f'IV Curve Fitting Progress\n'
-            title += f'Evals: {self.eval_count} | χ²: {chi_sq:.6e}'
-            self.ax.set_title(title, fontsize=12, fontweight='bold')
+            # Update axis limits - linear scale
+            self.ax_lin.set_xlim(np.min(all_v) * 0.95, np.max(all_v) * 1.05)
+            self.ax_lin.set_ylim(np.min(all_i) * 0.95, np.max(all_i) * 1.05)
+            
+            # Update plot with chi-squared info - both subplots
+            title = f'Evals: {self.eval_count} | χ²: {chi_sq:.6e}'
+            self.ax.set_title(f'IV Curve Fitting Progress (Log Scale)\n{title}', fontsize=12, fontweight='bold')
+            self.ax_lin.set_title(f'IV Curve Fitting Progress (Linear Scale)\n{title}', fontsize=12, fontweight='bold')
             self.plt.pause(0.001)  # Small pause to allow GUI update
             
         except Exception as e:
@@ -134,6 +161,7 @@ class IVParamFitter:
                 self.plt = None
             self.fig = None
             self.ax = None
+            self.ax_lin = None
         except Exception as e:
             print(f"Error closing display: {e}")
     
@@ -506,13 +534,13 @@ class IVParamFitter:
             self.eval_count += 1
             self._update_display(Irex, Vrex)
             
-            return (self.Inum - Irex) * 1e8
+            return (self.Inum - Irex) / (Irex * len(Irex))
         
         par_seq = [name for name, fit in self.to_fit.items() if fit]
         random.shuffle(par_seq)
         
         for run in range(run_count):
-            print(f"LMFIT SeqFit run {run}")
+            print(f"LMFIT run {run}")
             
             params = Parameters()
             for name in par_seq:

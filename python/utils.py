@@ -77,7 +77,7 @@ class Utils:
         return 1e8 * sum_val / countnum
     
     @staticmethod
-    def chi_sq_der(Vnum, Inum, Irex):
+    def chi_sq_der(Vnum, Inum, Irex, return_array=False):
         if len(Inum) != len(Vnum):
             raise ValueError("Numeric I and V must be of the same size")
         if len(Inum) != len(Irex):
