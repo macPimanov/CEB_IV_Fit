@@ -54,7 +54,6 @@ class IVParamFitter:
     
     def set_output_dir(self, output_dir):        
         self.output_dir = Path(output_dir)
-        self.output_writer = OutputWriter(output_dir)
 
     def _setup_display(self):
         """Setup matplotlib display for fitting visualization."""
@@ -488,9 +487,6 @@ class IVParamFitter:
         
         # Reset evaluation counter for display
         self.eval_count = 0
-        
-        self.output_writer.write_convergence(self.par.get('beta', 0), self._compute_current_chi_sq(), time.time())
-        
         par_seq = [name for name, fit in self.to_fit.items() if fit]
         random.shuffle(par_seq)
         
@@ -513,7 +509,7 @@ class IVParamFitter:
                 
                 self.par[param_name] = optimal_value
                 print(f"  {param_name}: {current_value:.6e} -> {optimal_value:.6e}, fmin = {fmin:.6e}")
-            
+                   
             # Save results
             self._save_fit_results(fmin)
     
@@ -592,18 +588,3 @@ class IVParamFitter:
                 params.write(f"{param_name} = {param_value} ({fit_status})\n")
             params.write(f"fmin = {fmin}\n")
 
-def write_convergence(x, f, start_time):
-    print(f"\nCURRENT XMIN = {x:.6e}\tCHISQMIN = {f:.6e}")
-    
-    with open('converg.txt', 'a') as conv:
-        conv.write(f"{x}\t{f}\t{time.time() - start_time:.6f}\n")
-
-class OutputWriter:
-    def __init__(self, output_dir):
-        self.output_dir = Path(output_dir)
-    
-    def write_convergence(self, x, f, start_time):
-        print(f"\nCURRENT XMIN = {x:.6e}\tCHISQMIN = {f:.6e}")
-        
-        with open(self.output_dir / 'converg.txt', 'a') as conv:
-            conv.write(f"{x}\t{f}\t{time.time() - start_time:.6f}\n")
