@@ -109,8 +109,30 @@ typedef struct {
 } CEBParameters;
 
 typedef struct {
+    // Basic numerical results
     DoubleArray Inum;  // Numerical current values
     DoubleArray Vnum;  // Numerical voltage values
+    
+    // Detailed per-iteration results (optional, may be NULL)
+    DoubleArray I;           // Current values per step
+    DoubleArray I_A;         // Andreev current values per step
+    DoubleArray Te;           // Electron temperature per step
+    DoubleArray Tsin;         // Superconductor temperature per step
+    DoubleArray DeltaT;       // DeltaT per step
+    DoubleArray Pe_ph;        // Electron-phonon power per step
+    DoubleArray Pand;         // Andreev power per step
+    DoubleArray Pleak;        // Leakage power per step
+    DoubleArray Pabs;         // Absorbed power per step
+    DoubleArray Pcool;        // Cooling power per step
+    DoubleArray NEPe_ph2;     // Electron-phonon NEP squared per step
+    DoubleArray NEPs;         // SIN NEP squared per step
+    DoubleArray NoiA;         // Amplifier noise squared per step
+    DoubleArray NEPph;        // Photon NEP per step
+    DoubleArray NEP;          // Total NEP per step
+    DoubleArray Sv;           // Responsivity per step
+    DoubleArray G_e;          // Electron thermal conductance per step
+    DoubleArray G_NIS;        // NIS thermal conductance per step
+    
     double time_spent; // Computation time in seconds
     int error_code;    // 0 for success, non-zero for error
     char error_message[256];

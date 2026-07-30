@@ -454,7 +454,7 @@ class IVParamFitter:
             return self._compute_ceb_properties_python()
     
     def _compute_ceb_properties_cpp(self):
-        """Use C++ threaded backend for computation."""
+        """Use C++ threaded backend for computation and write output files."""
         import time
         
         start_time = time.time()
@@ -475,8 +475,103 @@ class IVParamFitter:
         self.Inum = result['Inum']
         self.Vnum = result['Vnum']
         
+        # Write output files from result data
+        self._write_output_files(result, params)
+        
         print(f"Time spent: {result['time_spent']:.2f} seconds")
         return len(result['Inum']) + 1
+    
+    def _write_output_files(self, result, params):
+        """Write CEB output files from computed result data."""
+        import os
+        import datetime
+        import numpy as np
+        from pathlib import Path
+        
+        # Create output directory if it doesn't exist
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Physical parameters for file writing
+        M = float(params['M'])
+        MP = float(params['MP'])
+        total_bolometers = M * MP
+        
+        # Check if detailed data is available
+        detailed_data = result.get('Te') is not None
+        
+        if detailed_data:
+            # Open output files in the output directory
+            file_noise = open(self.output_dir / 'Noise.txt', 'w')
+            file_Te = open(self.output_dir / 'Te.txt', 'w')
+            file_NEP = open(self.output_dir / 'NEP.txt', 'w')
+            file_G = open(self.output_dir / 'G.txt', 'w')
+            
+            # Write headers
+            file_noise.write(f"Voltage\tNOISEep\tNOISEs\tNOISEa\tNOISE\tNOISEph\tNOISE^2-NOISEph^2\n")
+            file_Te.write(f"Voltage\tCurrent\tIqp\tIand\tV/Rleak\tTe\tTs\tDeltaT\tPeph\tPand\tPleak\tPabs\tPcool\n")
+            file_NEP.write(f"Voltage\tCurrent\tNEPeph\tNEPs\tNEPa\tNEP\tNEPph\tSv\tNEP^2-NEPph^2\n")
+            file_G.write(f"Voltage\tGe\tGnis\n")
+            
+            # Write data rows
+            for i in range(len(result['I'])):
+                # Write Te file
+                file_Te.write(f"{self.Vnum[i]:.6e}\t{self.Inum[i]:.6e}\t")
+                file_Te.write(f"{1e-9 * result['I'][i] * MP:.6e}\t{1e-9 * result['I_A'][i] * MP:.6e}\t")
+                file_Te.write(f"{1e9 * (result['I'][i] / params['Rleak']) * MP:.6e}\t{result['Te'][i]:.6e}\t{result['Tsin'][i]:.6e}\t")
+                file_Te.write(f"{result['DeltaT'][i]:.6e}\t{result['Pe_ph'][i]:.6e}\t{result['Pand'][i]:.6e}\t")
+                file_Te.write(f"{result['Pleak'][i]:.6e}\t{result['Pabs'][i]:.6e}\t{result['Pcool'][i]:.6e}\n")
+                
+                # Write Noise file
+                file_noise.write(f"{(2.0 * result['I'][i] + 1e-9 * result['I'][i] * params['Ra']) * M:.6e}\t")
+                file_noise.write(f"{1e9 * np.sqrt(result['NEPe_ph2'][i] * total_bolometers) * np.abs(result['Sv'][i]):.6e}\t")
+                file_noise.write(f"{1e9 * np.sqrt(result['NEPs'][i] * total_bolometers) * np.abs(result['Sv'][i]):.6e}\t")
+                file_noise.write(f"{1e9 * np.sqrt(result['NoiA'][i]):.6e}\t")
+                file_noise.write(f"{1e9 * result['NEP'][i] * np.abs(result['Sv'][i]):.6e}\t")
+                file_noise.write(f"{1e9 * result['NEPph'][i] * np.abs(result['Sv'][i]):.6e}\t")
+                file_noise.write(f"{1e9 * np.abs(result['Sv'][i]) * np.sqrt(np.power(result['NEP'][i], 2) - np.power(result['NEPph'][i], 2)):.6e}\n")
+                
+                # Write NEP file
+                file_NEP.write(f"{(2.0 * result['I'][i] + 1e-9 * result['I'][i] * params['Ra']) * M:.6e}\t")
+                file_NEP.write(f"{1e-9 * result['I'][i] * MP:.6e}\t{1e-12 * np.sqrt(result['NEPe_ph2'][i] * total_bolometers):.6e}\t")
+                file_NEP.write(f"{1e-12 * np.sqrt(result['NEPs'][i] * total_bolometers):.6e}\t{1e-12 * np.sqrt(result['NoiA'][i]):.6e}\t")
+                file_NEP.write(f"{1e-12 * result['NEP'][i]:.6e}\t{1e-12 * result['NEPph'][i]:.6e}\t{1e12 * np.abs(result['Sv'][i]):.6e}\t")
+                file_NEP.write(f"{1e-12 * np.sqrt(np.power(result['NEP'][i], 2) - np.power(result['NEPph'][i], 2)):.6e}\n")
+                
+                # Write G file
+                file_G.write(f"{(2.0 * result['I'][i] + 1e-9 * result['I'][i] * params['Ra']) * M:.6e}\t")
+                file_G.write(f"{result['G_e'][i]:.6e}\t{result['G_NIS'][i]:.6e}\n")
+            
+            file_noise.close()
+            file_Te.close()
+            file_NEP.close()
+            file_G.close()
+        else:
+            # Create minimal output files if detailed data not available
+            print("Warning: Detailed result data not available, writing minimal output files")
+            
+            file_Te = open(self.output_dir / 'Te.txt', 'w')
+            file_Te.write(f"Voltage\tCurrent\n")
+            for i in range(len(self.Vnum)):
+                file_Te.write(f"{self.Vnum[i]:.6e}\t{self.Inum[i]:.6e}\n")
+            file_Te.close()
+            
+            file_noise = open(self.output_dir / 'Noise.txt', 'w')
+            file_noise.write(f"Voltage\tNOISE\n")
+            for i in range(len(self.Vnum)):
+                file_noise.write(f"{self.Vnum[i]:.6e}\t0.0\n")
+            file_noise.close()
+            
+            file_NEP = open(self.output_dir / 'NEP.txt', 'w')
+            file_NEP.write(f"Voltage\tNEP\n")
+            for i in range(len(self.Vnum)):
+                file_NEP.write(f"{self.Vnum[i]:.6e}\t0.0\n")
+            file_NEP.close()
+            
+            file_G = open(self.output_dir / 'G.txt', 'w')
+            file_G.write(f"Voltage\tG\n")
+            for i in range(len(self.Vnum)):
+                file_G.write(f"{self.Vnum[i]:.6e}\t0.0\n")
+            file_G.close()
     
     def resample(self):
         return Utils.resample(self.Iexp, self.Vexp, self.Inum, self.Vnum)

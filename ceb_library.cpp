@@ -2,8 +2,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
-#include <filesystem>
-#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <thread>
@@ -170,11 +168,6 @@ void compute_ceb_properties_threaded(const CEBParameters* params, CEBResult* res
         const double dPbg = Pbg;
         const double Delta = (BCS_INTEGRAL * Tc);
 
-        // Backup existing Te.txt if it exists
-        if (std::filesystem::exists("Te.txt")) {
-            std::filesystem::rename("Te.txt", "Te_old.txt");
-        }
-
         const double Rsin = (Rn - Rabs) / NUMBER_OF_SINS_IN_CEB;
         const double I0 = 1e9 * (Delta / Rsin * K);
         const double Vg = Delta * K;
@@ -190,13 +183,59 @@ void compute_ceb_properties_threaded(const CEBParameters* params, CEBResult* res
             return;
         }
 
-        // Allocate memory for arrays
+        // Allocate memory for all arrays
+        const size_t resultSize = voltageStepsCount - 1;
+        
+        // Basic numerical results
+        result->Inum.data = new double[resultSize];
+        result->Inum.array_size = resultSize;
+        result->Vnum.data = new double[resultSize];
+        result->Vnum.array_size = resultSize;
+        
+        // Detailed per-iteration results
+        result->I.data = new double[resultSize];
+        result->I.array_size = resultSize;
+        result->I_A.data = new double[resultSize];
+        result->I_A.array_size = resultSize;
+        result->Te.data = new double[resultSize];
+        result->Te.array_size = resultSize;
+        result->Tsin.data = new double[resultSize];
+        result->Tsin.array_size = resultSize;
+        result->DeltaT.data = new double[resultSize];
+        result->DeltaT.array_size = resultSize;
+        result->Pe_ph.data = new double[resultSize];
+        result->Pe_ph.array_size = resultSize;
+        result->Pand.data = new double[resultSize];
+        result->Pand.array_size = resultSize;
+        result->Pleak.data = new double[resultSize];
+        result->Pleak.array_size = resultSize;
+        result->Pabs.data = new double[resultSize];
+        result->Pabs.array_size = resultSize;
+        result->Pcool.data = new double[resultSize];
+        result->Pcool.array_size = resultSize;
+        result->NEPe_ph2.data = new double[resultSize];
+        result->NEPe_ph2.array_size = resultSize;
+        result->NEPs.data = new double[resultSize];
+        result->NEPs.array_size = resultSize;
+        result->NoiA.data = new double[resultSize];
+        result->NoiA.array_size = resultSize;
+        result->NEPph.data = new double[resultSize];
+        result->NEPph.array_size = resultSize;
+        result->NEP.data = new double[resultSize];
+        result->NEP.array_size = resultSize;
+        result->Sv.data = new double[resultSize];
+        result->Sv.array_size = resultSize;
+        result->G_e.data = new double[resultSize];
+        result->G_e.array_size = resultSize;
+        result->G_NIS.data = new double[resultSize];
+        result->G_NIS.array_size = resultSize;
+
         std::vector<double> V(voltageStepsCount + 1);
         for (size_t i = 0; i <= voltageStepsCount; ++i) {
             V[i] = Vstr + (static_cast<double>(i) * dV);
         }
 
-        std::vector<CEBLibrary::IterationResult> results(voltageStepsCount - 1);
+        std::vector<CEBLibrary::IterationResult> results(resultSize);
         const size_t numThreads = std::thread::hardware_concurrency();
         std::vector<std::thread> threads;
 
@@ -231,14 +270,14 @@ void compute_ceb_properties_threaded(const CEBParameters* params, CEBResult* res
             .V = V.data()
         };
 
-        for (size_t i = 0; i < voltageStepsCount - 1; ++i) {
+        for (size_t i = 0; i < resultSize; ++i) {
             threads.emplace_back([i, &baseInput, &results]() {
                 CEBLibrary::IterationInput input = baseInput;
                 input.voltageStep = i + 1;
                 results[i] = CEBLibrary::computeIteration(input);
             });
 
-            if (threads.size() >= numThreads || i == voltageStepsCount - 2) {
+            if (threads.size() >= numThreads || i == resultSize - 1) {
                 for (auto& t : threads) {
                     if (t.joinable()) {
                         t.join();
@@ -252,39 +291,31 @@ void compute_ceb_properties_threaded(const CEBParameters* params, CEBResult* res
             return a.voltageStep < b.voltageStep;
         });
 
-        // Write output files
-        std::ofstream file_Noise("Noise.txt");
-        std::ofstream file_Te("Te.txt");
-        std::ofstream file_NEP("NEP.txt");
-        std::ofstream file_G("G.txt");
-
-        file_Noise << "Voltage\tNOISEep\tNOISEs\tNOISEa\tNOISE\tNOISEph\tNOISE^2-NOISEph^2\n";
-        file_Te << "Voltage\tCurrent\tIqp\tIand\tV/Rleak\tTe\tTs\tDeltaT\tPeph\tPand\tPleak\tPabs\tPcool\n";
-        file_NEP << "Voltage\tCurrent\tNEPeph\tNEPs\tNEPa\tNEP\tNEPph\tSv\tNEP^2-NEPph^2\n";
-        file_G << "Voltage\tGe\tGnis\n";
-
-        for (const auto& res : results) {
-            file_Te << res.Vnum << '\t' << res.Inum << '\t' << 1e-9 * res.I * bolometersInParallel << '\t'
-                    << 1e-9 * res.I_A * bolometersInParallel << '\t' << 1e9 * (res.V / Rleak) * bolometersInParallel << '\t'
-                    << res.Te << '\t' << res.Tsin << '\t' << res.DeltaT << '\t' << res.Pe_ph << '\t' << res.Pand << '\t'
-                    << res.Pleak << '\t' << res.Pabs << '\t' << res.Pcool << '\n';
-
-            file_Noise << (2.0 * res.V + 1e-9 * res.I * Rabs) * bolometersInSeries << '\t'
-                      << 1e9 * std::sqrt(res.NEPe_ph2 * totalBolometersNumber) * std::abs(res.Sv) << '\t'
-                      << 1e9 * std::sqrt(res.NEPs * totalBolometersNumber) * std::abs(res.Sv) << '\t'
-                      << 1e9 * std::sqrt(res.NoiA) << '\t' << 1e9 * res.NEP * std::abs(res.Sv) << '\t'
-                      << 1e9 * res.NEPph * std::abs(res.Sv) << '\t'
-                      << 1e9 * std::abs(res.Sv) * std::sqrt(std::pow(res.NEP, 2) - std::pow(res.NEPph, 2)) << '\n';
-
-            file_NEP << (2.0 * res.V + 1e-9 * res.I * Rabs) * bolometersInSeries << '\t'
-                     << 1e-9 * res.I * bolometersInParallel << '\t' << 1e-12 * std::sqrt(res.NEPe_ph2 * totalBolometersNumber) << '\t'
-                     << 1e-12 * std::sqrt(res.NEPs * totalBolometersNumber) << '\t' << 1e-12 * std::sqrt(res.NoiA) << '\t'
-                     << 1e-12 * res.NEP << '\t' << 1e-12 * res.NEPph << '\t' << 1e12 * std::abs(res.Sv) << '\t'
-                     << 1e-12 * std::sqrt(std::pow(res.NEP, 2) - std::pow(res.NEPph, 2)) << '\n';
-
-            file_G << (NUMBER_OF_SINS_IN_CEB * res.V + 1e-9 * (res.I * Rabs)) * bolometersInSeries << '\t'
-                   << res.G_e << '\t' << res.G_NIS << '\n';
-
+        // Write console output and populate result arrays
+        for (size_t i = 0; i < resultSize; ++i) {
+            const auto& res = results[i];
+            
+            result->Inum.data[i] = res.Inum;
+            result->Vnum.data[i] = res.Vnum;
+            result->I.data[i] = res.I;
+            result->I_A.data[i] = res.I_A;
+            result->Te.data[i] = res.Te;
+            result->Tsin.data[i] = res.Tsin;
+            result->DeltaT.data[i] = res.DeltaT;
+            result->Pe_ph.data[i] = res.Pe_ph;
+            result->Pand.data[i] = res.Pand;
+            result->Pleak.data[i] = res.Pleak;
+            result->Pabs.data[i] = res.Pabs;
+            result->Pcool.data[i] = res.Pcool;
+            result->NEPe_ph2.data[i] = res.NEPe_ph2;
+            result->NEPs.data[i] = res.NEPs;
+            result->NoiA.data[i] = res.NoiA;
+            result->NEPph.data[i] = res.NEPph;
+            result->NEP.data[i] = res.NEP;
+            result->Sv.data[i] = res.Sv;
+            result->G_e.data[i] = res.G_e;
+            result->G_NIS.data[i] = res.G_NIS;
+            
             std::clog << std::setw(3) << res.voltageStep << '/' << voltageStepsCount - 1 << ": "
                       << "V:" << std::setw(12) << res.Vnum << "\t"
                       << "I:" << std::setw(12) << res.Inum << "\t"
@@ -292,23 +323,6 @@ void compute_ceb_properties_threaded(const CEBParameters* params, CEBResult* res
                       << "Te:" << std::setw(12) << res.Te << "\t"
                       << "NEPs:" << std::setw(12) << 1e-12 * std::sqrt(res.NEPs * totalBolometersNumber) << "\t"
                       << "NEPt:" << std::setw(12) << 1e-12 * res.NEP << '\n';
-        }
-
-        file_Noise.close();
-        file_Te.close();
-        file_NEP.close();
-        file_G.close();
-
-        // Allocate memory for results
-        const size_t resultSize = voltageStepsCount - 1;
-        result->Inum.data = new double[resultSize];
-        result->Inum.array_size = resultSize;
-        result->Vnum.data = new double[resultSize];
-        result->Vnum.array_size = resultSize;
-
-        for (size_t i = 0; i < resultSize; ++i) {
-            result->Inum.data[i] = results[i].Inum;
-            result->Vnum.data[i] = results[i].Vnum;
         }
 
         result->time_spent = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
@@ -323,9 +337,64 @@ void free_ceb_result(CEBResult* result) {
     if (result) {
         delete[] result->Inum.data;
         delete[] result->Vnum.data;
+        delete[] result->I.data;
+        delete[] result->I_A.data;
+        delete[] result->Te.data;
+        delete[] result->Tsin.data;
+        delete[] result->DeltaT.data;
+        delete[] result->Pe_ph.data;
+        delete[] result->Pand.data;
+        delete[] result->Pleak.data;
+        delete[] result->Pabs.data;
+        delete[] result->Pcool.data;
+        delete[] result->NEPe_ph2.data;
+        delete[] result->NEPs.data;
+        delete[] result->NoiA.data;
+        delete[] result->NEPph.data;
+        delete[] result->NEP.data;
+        delete[] result->Sv.data;
+        delete[] result->G_e.data;
+        delete[] result->G_NIS.data;
+        
         result->Inum.data = nullptr;
         result->Inum.array_size = 0;
         result->Vnum.data = nullptr;
         result->Vnum.array_size = 0;
+        result->I.data = nullptr;
+        result->I.array_size = 0;
+        result->I_A.data = nullptr;
+        result->I_A.array_size = 0;
+        result->Te.data = nullptr;
+        result->Te.array_size = 0;
+        result->Tsin.data = nullptr;
+        result->Tsin.array_size = 0;
+        result->DeltaT.data = nullptr;
+        result->DeltaT.array_size = 0;
+        result->Pe_ph.data = nullptr;
+        result->Pe_ph.array_size = 0;
+        result->Pand.data = nullptr;
+        result->Pand.array_size = 0;
+        result->Pleak.data = nullptr;
+        result->Pleak.array_size = 0;
+        result->Pabs.data = nullptr;
+        result->Pabs.array_size = 0;
+        result->Pcool.data = nullptr;
+        result->Pcool.array_size = 0;
+        result->NEPe_ph2.data = nullptr;
+        result->NEPe_ph2.array_size = 0;
+        result->NEPs.data = nullptr;
+        result->NEPs.array_size = 0;
+        result->NoiA.data = nullptr;
+        result->NoiA.array_size = 0;
+        result->NEPph.data = nullptr;
+        result->NEPph.array_size = 0;
+        result->NEP.data = nullptr;
+        result->NEP.array_size = 0;
+        result->Sv.data = nullptr;
+        result->Sv.array_size = 0;
+        result->G_e.data = nullptr;
+        result->G_e.array_size = 0;
+        result->G_NIS.data = nullptr;
+        result->G_NIS.array_size = 0;
     }
 }

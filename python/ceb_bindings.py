@@ -71,8 +71,30 @@ class CEBParameters(ctypes.Structure):
 
 class CEBResult(ctypes.Structure):
     _fields_ = [
+        # Basic numerical results
         ("Inum", DoubleArray),  # Numerical current values
         ("Vnum", DoubleArray),  # Numerical voltage values
+        
+        # Detailed per-iteration results (optional, may be NULL)
+        ("I", DoubleArray),           # Current values per step
+        ("I_A", DoubleArray),         # Andreev current values per step
+        ("Te", DoubleArray),           # Electron temperature per step
+        ("Tsin", DoubleArray),         # Superconductor temperature per step
+        ("DeltaT", DoubleArray),       # DeltaT per step
+        ("Pe_ph", DoubleArray),        # Electron-phonon power per step
+        ("Pand", DoubleArray),         # Andreev power per step
+        ("Pleak", DoubleArray),        # Leakage power per step
+        ("Pabs", DoubleArray),         # Absorbed power per step
+        ("Pcool", DoubleArray),        # Cooling power per step
+        ("NEPe_ph2", DoubleArray),     # Electron-phonon NEP squared per step
+        ("NEPs", DoubleArray),         # SIN NEP squared per step
+        ("NoiA", DoubleArray),         # Amplifier noise squared per step
+        ("NEPph", DoubleArray),        # Photon NEP per step
+        ("NEP", DoubleArray),          # Total NEP per step
+        ("Sv", DoubleArray),           # Responsivity per step
+        ("G_e", DoubleArray),          # Electron thermal conductance per step
+        ("G_NIS", DoubleArray),        # NIS thermal conductance per step
+        
         ("time_spent", ctypes.c_double), # Computation time in seconds
         ("error_code", ctypes.c_int),    # 0 for success, non-zero for error
         ("error_message", ctypes.c_char * 256)
@@ -93,7 +115,7 @@ lib.free_ceb_result.restype = None
 
 def compute_ceb_properties_threaded(params_dict, amp_noise=None):
     """
-    Compute CEB properties using the threaded C++ library.
+    Compute CEB properties using threaded C++ library.
     
     Args:
         params_dict: Dictionary containing physical parameters
@@ -103,12 +125,31 @@ def compute_ceb_properties_threaded(params_dict, amp_noise=None):
         Dictionary containing:
             - 'Inum': numpy array of numerical current values  
             - 'Vnum': numpy array of numerical voltage values
+            - Optional detailed arrays (if computations were performed):
+                - 'I': current values per step
+                - 'I_A': Andreev current values per step
+                - 'Te': electron temperature per step
+                - 'Tsin': superconductor temperature per step
+                - 'DeltaT': DeltaT per step
+                - 'Pe_ph': electron-phonon power per step
+                - 'Pand': Andreev power per step
+                - 'Pleak': leakage power per step
+                - 'Pabs': absorbed power per step
+                - 'Pcool': cooling power per step
+                - 'NEPe_ph2': electron-phonon NEP squared per step
+                - 'NEPs': SIN NEP squared per step
+                - 'NoiA': amplifier noise squared per step
+                - 'NEPph': photon NEP per step
+                - 'NEP': total NEP per step
+                - 'Sv': responsivity per step
+                - 'G_e': electron thermal conductance per step
+                - 'G_NIS': NIS thermal conductance per step
             - 'time_spent': computation time in seconds
             - 'error_code': 0 for success
             - 'error_message': error message if error occurred
         
     Raises:
-        RuntimeError: If the C++ function returns an error
+        RuntimeError: If C++ function returns an error
     """
     # Default amplifier noise (AD745)
     if amp_noise is None:
@@ -166,16 +207,47 @@ def compute_ceb_properties_threaded(params_dict, amp_noise=None):
         shape=(result.Vnum.array_size,)
     ).copy()
     
-    # Free C side memory
-    lib.free_ceb_result(ctypes.byref(result))
-    
-    # Return results as Python dictionary
-    return {
+    # Build result dictionary with basic results
+    result_dict = {
         'Inum': inum_array,
         'Vnum': vnum_array,
         'time_spent': result.time_spent,
         'error_code': result.error_code
     }
+    
+    # Helper function to safely convert optional arrays
+    def safe_convert_array(array_struct):
+        if array_struct.data is not None and array_struct.array_size > 0:
+            return np.ctypeslib.as_array(
+                ctypes.cast(array_struct.data, ctypes.POINTER(ctypes.c_double)),
+                shape=(array_struct.array_size,)
+            ).copy()
+        return None
+    
+    # Add optional detailed arrays if available
+    result_dict['I'] = safe_convert_array(result.I)
+    result_dict['I_A'] = safe_convert_array(result.I_A)
+    result_dict['Te'] = safe_convert_array(result.Te)
+    result_dict['Tsin'] = safe_convert_array(result.Tsin)
+    result_dict['DeltaT'] = safe_convert_array(result.DeltaT)
+    result_dict['Pe_ph'] = safe_convert_array(result.Pe_ph)
+    result_dict['Pand'] = safe_convert_array(result.Pand)
+    result_dict['Pleak'] = safe_convert_array(result.Pleak)
+    result_dict['Pabs'] = safe_convert_array(result.Pabs)
+    result_dict['Pcool'] = safe_convert_array(result.Pcool)
+    result_dict['NEPe_ph2'] = safe_convert_array(result.NEPe_ph2)
+    result_dict['NEPs'] = safe_convert_array(result.NEPs)
+    result_dict['NoiA'] = safe_convert_array(result.NoiA)
+    result_dict['NEPph'] = safe_convert_array(result.NEPph)
+    result_dict['NEP'] = safe_convert_array(result.NEP)
+    result_dict['Sv'] = safe_convert_array(result.Sv)
+    result_dict['G_e'] = safe_convert_array(result.G_e)
+    result_dict['G_NIS'] = safe_convert_array(result.G_NIS)
+    
+    # Free C side memory
+    lib.free_ceb_result(ctypes.byref(result))
+    
+    return result_dict
 
 
 def get_amp_constants(amp_type='AD745'):
