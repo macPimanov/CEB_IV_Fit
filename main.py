@@ -25,13 +25,14 @@ def main():
                        help='Number of fitting runs')
     parser.add_argument('--remove-offset', action='store_true',
                        help='Remove voltage offset from data')
-    parser.add_argument('--save-config', type=str,
-                       help='Save current configuration to specified file')
     parser.add_argument('--display', action='store_true',
                        help='Display real-time fitting progress with matplotlib (requires matplotlib and display environment)')
+    parser.add_argument('--output_dir', type=str,
+                       help='Output directory for result files (default: run_<data_filename>_<timestamp>)')
     
     args = parser.parse_args()
     
+       
     start_time = time.time()
     
     try:
@@ -43,6 +44,8 @@ def main():
             print(f"Default config created at '{args.config}'. Please edit and run again.")
             return 0
         
+
+
         # Initialize fitter
         print("Initializing IV Parameter Fitter...")
         fitter = IVParamFitter(config_file=args.config, display=args.display)
@@ -50,11 +53,23 @@ def main():
         # Override data file if specified
         if args.data:
             fitter.data_file = args.data
+
         
-        # Save config if requested
-        if args.save_config:
-            fitter.save_config(args.save_config)
-            print(f"Configuration saved to '{args.save_config}'")
+        # Determine output directory
+        if args.output_dir:
+            output_dir = args.output_dir
+        else:
+            data_file_name = fitter.data_file
+            # Get base name without extension
+            data_file_name = os.path.splitext(os.path.basename(data_file_name))[0]
+            # Generate timestamp in YYYYMMhhmmss format
+            timestamp = time.strftime('%Y%m%d%H%M%S')
+            output_dir = f"run_{data_file_name}_fit{timestamp}"
+        
+        # Create output directory if it doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
+        fitter.set_output_dir(output_dir)
+        print(f"Output directory: {output_dir}")
         
         # Load experimental data
         print(f"Loading experimental data from '{fitter.data_file}'...")
@@ -77,7 +92,7 @@ def main():
             fitter.lmfit_sequential_fit(run_count=args.runs)
         
         # Save final parameters
-        final_config_file = args.config.replace('.json', '_fitted.json')
+        final_config_file = os.path.join(output_dir, args.config.replace('.json', '_fitted.json'))
         fitter.save_config(final_config_file)
         print(f"\nFinal parameters saved to '{final_config_file}'")
         

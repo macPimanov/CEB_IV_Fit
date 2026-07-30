@@ -83,9 +83,9 @@ CEBLibrary::IterationResult CEBLibrary::computeIteration(const CEBLibrary::Itera
 
     const double dIdV = input.I0
         * (currentIntegral(input.DeltaT, input.V[input.voltageStep + 1] / input.Vg, input.tauSin, tauE)
-           + input.ii * AndCurrent(input.DeltaT, input.V[input.voltageStep + 1] / input.Vg, tauE, input.Wt, input.tm)
+           + AndCurrent(input.ii, input.DeltaT, input.V[input.voltageStep + 1] / input.Vg, tauE, input.Wt, input.tm)
            - currentIntegral(input.DeltaT, input.V[input.voltageStep - 1] / input.Vg, input.tauSin, tauE)
-           - input.ii * AndCurrent(input.DeltaT, input.V[input.voltageStep - 1] / input.Vg, tauE, input.Wt, input.tm))
+           - AndCurrent(input.ii, input.DeltaT, input.V[input.voltageStep - 1] / input.Vg, tauE, input.Wt, input.tm))
         / (2.0 * input.dV);
 
     const double dPdV = std::pow(input.Vg, 2) / input.Rsin * 1e12

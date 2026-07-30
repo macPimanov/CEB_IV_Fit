@@ -14,7 +14,7 @@ except ImportError:
     HAS_CPP_BACKEND = False
 
 class IVParamFitter:
-    def __init__(self, config_file=None, use_cpp_backend=True, display=False):
+    def __init__(self, config_file=None, use_cpp_backend=True, display=False, output_dir="."):
         self.model = CEBNumericModel()
         self.constants = PhysicsConstants()
         self.Iexp = None
@@ -27,6 +27,7 @@ class IVParamFitter:
         self.amp_constants = self.constants.get_amplifier_constants('AD745')
         self.use_cpp_backend = use_cpp_backend and HAS_CPP_BACKEND
         self.display = display
+        self.set_output_dir(output_dir)
         
         # Initialize display system
         self.fig = None
@@ -51,6 +52,10 @@ class IVParamFitter:
         else:
             self.load_default_parameters()
     
+    def set_output_dir(self, output_dir):        
+        self.output_dir = Path(output_dir)
+        self.output_writer = OutputWriter(output_dir)
+
     def _setup_display(self):
         """Setup matplotlib display for fitting visualization."""
         try:
@@ -290,12 +295,6 @@ class IVParamFitter:
         dPbg = Pbg
         Delta = self.constants.BCS_INTEGRAL * Tc  # [K]
         
-        # Back up existing Te.txt if it exists
-        if Path('Te.txt').exists():
-            import datetime
-            timestamp = datetime.datetime.now().strftime('%Y%m%d%H%M%S')
-            Path('Te.txt').rename(f'Te_{timestamp}.txt')
-        
         # Normalized constants
         Rsin = (Rn - Ra) / self.constants.NUMBER_OF_SINS_IN_CEB
         I0 = 1e9 * (Delta / Rsin * self.constants.K)  # [nA]
@@ -319,11 +318,12 @@ class IVParamFitter:
         self.Inum = np.zeros(voltage_steps - 1)
         self.Vnum = np.zeros(voltage_steps - 1)
         
-        # Open output files
-        file_noise = open('Noise.txt', 'w')
-        file_Te = open('Te.txt', 'w')
-        file_NEP = open('NEP.txt', 'w')
-        file_G = open('G.txt', 'w')
+        # Open output files in the output directory
+        file_noise = open(self.output_dir / 'Noise.txt', 'w')
+        print(f"VSHAMPOR: opened {file_noise} to write")
+        file_Te = open(self.output_dir / 'Te.txt', 'w')
+        file_NEP = open(self.output_dir / 'NEP.txt', 'w')
+        file_G = open(self.output_dir / 'G.txt', 'w')
         
         # Write headers
         file_noise.write(f"Voltage\tNOISEep\tNOISEs\tNOISEa\tNOISE\tNOISEph\tNOISE^2-NOISEph^2\n")
@@ -489,7 +489,7 @@ class IVParamFitter:
         # Reset evaluation counter for display
         self.eval_count = 0
         
-        write_convergence(self.par.get('beta', 0), self._compute_current_chi_sq(), time.time())
+        self.output_writer.write_convergence(self.par.get('beta', 0), self._compute_current_chi_sq(), time.time())
         
         par_seq = [name for name, fit in self.to_fit.items() if fit]
         random.shuffle(par_seq)
@@ -580,9 +580,10 @@ class IVParamFitter:
         return Utils.chi_sq_der(self.Vnum, self.Inum, Irex)
     
     def _save_fit_results(self, fmin):
-        append_newline = Path('fitparameters_new.txt').exists() and Path('fitparameters_new.txt').stat().st_size > 0
+        fitparams_path = self.output_dir / 'fitparameters_new.txt'
+        append_newline = fitparams_path.exists() and fitparams_path.stat().st_size > 0
         
-        with open('fitparameters_new.txt', 'a') as params:
+        with open(fitparams_path, 'a') as params:
             if append_newline:
                 params.write('\n')
             params.write(f"time = {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
@@ -596,3 +597,13 @@ def write_convergence(x, f, start_time):
     
     with open('converg.txt', 'a') as conv:
         conv.write(f"{x}\t{f}\t{time.time() - start_time:.6f}\n")
+
+class OutputWriter:
+    def __init__(self, output_dir):
+        self.output_dir = Path(output_dir)
+    
+    def write_convergence(self, x, f, start_time):
+        print(f"\nCURRENT XMIN = {x:.6e}\tCHISQMIN = {f:.6e}")
+        
+        with open(self.output_dir / 'converg.txt', 'a') as conv:
+            conv.write(f"{x}\t{f}\t{time.time() - start_time:.6f}\n")
