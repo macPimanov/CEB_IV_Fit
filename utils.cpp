@@ -2,6 +2,7 @@
 #include <chrono>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <valarray>
 #include <vector>
@@ -32,7 +33,9 @@ std::tuple<std::valarray<double>, std::valarray<double>> getExperimentalData(
         }
         in.close();
     } else {
-        throw std::runtime_error(std::format("Unable to read experimental data from \"{}\"", filename));
+        std::ostringstream oss;
+        oss << "Unable to read experimental data from \"" << filename << "\"";
+        throw std::runtime_error(oss.str());
     }
 
     std::clog << "Fitting for " << std::quoted(filename) << " started!" << std::endl;
@@ -253,7 +256,9 @@ void writeIV(const std::string& filename,
         }
         f.close();
     } else {
-        throw std::runtime_error(std::format("Unable to write \"{}\"", filename));
+        std::ostringstream oss;
+        oss << "Unable to write \"" << filename << "\"";
+        throw std::runtime_error(oss.str());
     }
 }
 

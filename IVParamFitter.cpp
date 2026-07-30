@@ -5,6 +5,7 @@
 #include <iostream>
 #include <numeric>
 #include <random>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -13,184 +14,13 @@
 #include "utils.h"
 #include "CEBNumericModel.h"
 #include "MinimizationAlgorithms.h"
+#include "ceb_library.h"
 
 #include "IVParamFitter.h"
 
-struct IterationInput {
-    size_t voltageStep;
-    double DeltaT;
-    double tauSin;
-    double Delta;
-    double Vg;
-    double Rsin;
-    double Rabs;
-    double Rleak;
-    double I0;
-    double Sigma;
-    double Vol;
-    double TephPOW;
-    double Tph;
-    double Tc;
-    double Wt;
-    double tm;
-    double ii;
-    double dT;
-    double dV;
-    double bolometersInSeries;
-    double bolometersInParallel;
-    double beta;
-    double dPbg;
-    double FREQUENCY;
-    double BANDWIDTH;
-    double totalBolometersNumber;
-    std::valarray<double>* V;
-};
-
-struct IterationResult {
-    size_t voltageStep;
-    double Vnum;
-    double Inum;
-    double I;
-    double I_A;
-    double V;
-    double Te;
-    double Tsin;
-    double DeltaT;
-    double Pe_ph;
-    double Pand;
-    double Pleak;
-    double Pabs;
-    double Pcool;
-    double NEPe_ph2;
-    double NEPs;
-    double NoiA;
-    double NEPph;
-    double NEP;
-    double Sv;
-    double G_e;
-    double G_NIS;
-};
-
-IterationResult computeIteration(const IterationInput& input) {
-    IterationResult result{};
-
-    constexpr double dT = 0.005;
-
-    double Pe_ph, Pabs, Pleak, Pcool, Ps, Pand;
-    double tauELower = 0.0;
-    double tauEUpper = 3.0 / BCS_INTEGRAL;
-    double tauE;
-    double I, I_A;
-
-    for (size_t l = 0; l < 15; ++l) {
-        tauE = (tauELower + tauEUpper) / 2.0;
-
-        I = currentIntegral(input.DeltaT, (*input.V)[input.voltageStep] / input.Vg, input.tauSin, tauE) * input.I0
-            + 1e9 * ((*input.V)[input.voltageStep] / input.Rleak);
-
-        I_A = input.ii * AndCurrent(input.DeltaT, (*input.V)[input.voltageStep] / input.Vg, tauE, input.Wt, input.tm) * input.I0;
-
-        Pe_ph = input.Sigma * input.Vol
-            * (std::pow(input.Tph, input.TephPOW) - std::pow(tauE * input.Delta, input.TephPOW)) * 1e3;
-
-        Pabs = std::pow(I, 2) * input.Rabs * 1e-6;
-
-        Pleak = NUMBER_OF_SINS_IN_CEB * std::pow((*input.V)[input.voltageStep], 2) / input.Rleak * 1e12;
-
-        Pand = std::pow(I_A * 1e-3, 2) * input.Rabs + 2.0 * (I_A * 1e3) * (*input.V)[input.voltageStep];
-
-        std::tie(Pcool, Ps) = PowerCoolInt(input.DeltaT, (*input.V)[input.voltageStep] / input.Vg, input.tauSin, tauE);
-
-        Pcool *= std::pow(input.Vg, 2) / input.Rsin * 1e12;
-        Ps *= std::pow(input.Vg, 2) / input.Rsin * 1e12;
-
-        const double Pheat = Pe_ph + Pabs + Pand + input.dPbg + 2.0 * input.beta * Ps + Pleak;
-        if (Pheat < NUMBER_OF_SINS_IN_CEB * Pcool) {
-            tauEUpper = tauE;
-        } else {
-            tauELower = tauE;
-        }
-    }
-
-    const double Te = tauE * input.Delta;
-
-    result.Inum = 1e-9 * (I + I_A) * input.bolometersInParallel;
-    result.Vnum = (NUMBER_OF_SINS_IN_CEB * (*input.V)[input.voltageStep] + 1e-9 * (I + I_A) * input.Rabs) * input.bolometersInSeries;
-
-    result.Vnum = result.Vnum;
-    result.Inum = result.Inum;
-    result.I = I;
-    result.I_A = I_A;
-    result.V = (*input.V)[input.voltageStep];
-    result.Te = Te;
-    result.Tsin = input.Tph;
-    result.DeltaT = input.DeltaT;
-    result.Pe_ph = Pe_ph;
-    result.Pand = Pand;
-    result.Pleak = Pleak;
-    result.Pabs = Pabs;
-    result.Pcool = Pcool;
-    result.voltageStep = input.voltageStep;
-
-    const double dPT = std::get<0>(PowerCoolInt(input.DeltaT, (*input.V)[input.voltageStep] / input.Vg, input.tauSin, tauE + dT / input.Delta))
-        - std::get<0>(PowerCoolInt(input.DeltaT, (*input.V)[input.voltageStep] / input.Vg, input.tauSin, tauE - dT / input.Delta));
-
-    const double dPdT = 1e12 * (std::pow(input.Vg, 2) / input.Rsin) * dPT / (2.0 * dT);
-
-    const double dIdT = input.I0
-        * (currentIntegral(input.DeltaT, (*input.V)[input.voltageStep] / input.Vg, input.tauSin, tauE + dT / input.Delta)
-           - currentIntegral(input.DeltaT, (*input.V)[input.voltageStep] / input.Vg, input.tauSin, tauE - dT / input.Delta))
-        / (2.0 * dT);
-
-    const double dIdV = input.I0
-        * (currentIntegral(input.DeltaT, (*input.V)[input.voltageStep + 1] / input.Vg, input.tauSin, tauE)
-           + input.ii * AndCurrent(input.DeltaT, (*input.V)[input.voltageStep + 1] / input.Vg, tauE, input.Wt, input.tm)
-           - currentIntegral(input.DeltaT, (*input.V)[input.voltageStep - 1] / input.Vg, input.tauSin, tauE)
-           - input.ii * AndCurrent(input.DeltaT, (*input.V)[input.voltageStep - 1] / input.Vg, tauE, input.Wt, input.tm))
-        / (2.0 * input.dV);
-
-    const double dPdV = std::pow(input.Vg, 2) / input.Rsin * 1e12
-        * (std::get<0>(PowerCoolInt(input.DeltaT, (*input.V)[input.voltageStep + 1] / input.Vg, input.tauSin, tauE))
-           - std::get<0>(PowerCoolInt(input.DeltaT, (*input.V)[input.voltageStep - 1] / input.Vg, input.tauSin, tauE)))
-        / (2.0 * input.dV);
-
-    const double G_NIS = dPdT;
-    const double G_e = 5.0 * input.Sigma * input.Vol * std::pow(Te, 4) * 1e3;
-    const double G = G_e + NUMBER_OF_SINS_IN_CEB * (G_NIS - dIdT / dIdV * dPdV);
-    const double Sv = -2.0 * dIdT / dIdV / G / input.bolometersInParallel;
-
-    const double NEPe_ph2 = 10.0 * (E * K) * input.Sigma * input.Vol * (std::pow(input.Tph, input.TephPOW) + std::pow(Te, input.TephPOW)) * 1e3 * 1e12;
-
-    const double NoiA = std::pow(VOLTAGE_NOISE_2_AMPS, 2)
-        + std::pow(CURRENT_NOISE_2_AMPS * (2.0 * 1e9 / dIdV + input.Rabs) * input.bolometersInSeries / input.bolometersInParallel, 2);
-
-    const double NEPa = NoiA / std::pow(Sv, 2);
-
-    const double dI = 1e9 * (2.0 * E * std::abs(I) / std::pow(dIdV * Sv, 2));
-
-    const double dPdI = 1e9 * (2.0 * 2.0 * E * Pcool / (dIdV * Sv));
-
-    const double mm = std::log(std::sqrt(2.0 * M_PI * K * Te * input.Vg) / (2.0 * std::abs(I) * input.Rsin * 1e-9));
-
-    const double dP = (0.5 + std::pow(mm, 2)) * std::pow(K * Te, 2) * std::abs(I) * E * 1e-9 * 1e24;
-
-    const double NEPs = NUMBER_OF_SINS_IN_CEB * (dI - 2.0 * dPdI + dP);
-
-    const double NEPph = 1e12 * std::sqrt(input.totalBolometersNumber * 2.0 * (input.FREQUENCY * 1e9) * (input.dPbg * 1e-12) * H + std::pow((input.dPbg * 1e-12) * input.totalBolometersNumber, 2) / (input.BANDWIDTH * 1e9));
-
-    const double NEP = std::sqrt((NEPe_ph2 + NEPs) * input.totalBolometersNumber + NEPa + std::pow(NEPph, 2));
-
-    result.NEPe_ph2 = NEPe_ph2;
-    result.NEPs = NEPs;
-    result.NoiA = NoiA;
-    result.NEPph = NEPph;
-    result.NEP = NEP;
-    result.Sv = Sv;
-    result.G_e = G_e;
-    result.G_NIS = G_NIS;
-
-    return result;
-}
+using CEBLibrary::IterationInput;
+using CEBLibrary::IterationResult;
+using CEBLibrary::computeIteration;
 
 IVParamFitter::IVParamFitter() {
     /*
@@ -206,7 +36,9 @@ IVParamFitter::IVParamFitter() {
             par[parname] = parvalue;
             ToFit[parname] = parfit;
 
-            std::clog << std::left << std::setw(18) << std::format("{} = {},", parname, parvalue)
+            std::ostringstream oss;
+            oss << std::left << std::setw(18) << parname << " = " << parvalue << ",";
+            std::clog << oss.str()
                     << std::internal << "to fit = " << std::boolalpha << parfit
                     << std::endl;
         }
@@ -264,11 +96,17 @@ void IVParamFitter::SeqFit(const size_t runCount, const std::valarray<double>& I
             if (appendNewLine) {
                 params << std::endl;
             }
-            params << std::format("time = {}", std::chrono::system_clock::now()) << std::endl;
-            for (const auto& [parname, parvalue]: par)
-                params << std::format("{} = {} ({})", parname, parvalue,
-                                      ToFit[parname] ? std::string("fit") : std::string("skip")) << std::endl;
-            params << std::format("fmin = {}", fmin) << std::endl;
+            std::ostringstream oss;
+            oss << "time = " << std::chrono::system_clock::now();
+            params << oss.str() << std::endl;
+            for (const auto& [parname, parvalue]: par) {
+                std::ostringstream oss2;
+                oss2 << parname << " = " << parvalue << " (" << (ToFit[parname] ? std::string("fit") : std::string("skip")) << ")";
+                params << oss2.str() << std::endl;
+            }
+            std::ostringstream oss3;
+            oss3 << "fmin = " << fmin;
+            params << oss3.str() << std::endl;
             params.close();
         } else {
             throw std::runtime_error("Unable to append to \"fitparameters_new.txt\"");
@@ -381,183 +219,49 @@ size_t IVParamFitter::computeCEBProperties() {
     Inum.resize(voltageStepsCount - 1);
     Vnum.resize(voltageStepsCount - 1);
 
-    std::valarray<double> V(voltageStepsCount + 1); // [V]
-    std::ranges::iota(V, 0);
-    V = Vstr + (V * dV);
-
-    std::ofstream file_Noise("Noise.txt");
-    if (!file_Noise) {
-        throw std::runtime_error("Unable to write \"file_Noise.txt\"");
-    }
-    std::ofstream file_Te("Te.txt");
-    if (!file_Te) {
-        throw std::runtime_error("Unable to write \"file_Te.txt\"");
-    }
-    std::ofstream file_NEP("NEP.txt");
-    if (!file_NEP) {
-        throw std::runtime_error("Unable to write \"NEP.txt\"");
-    }
-    std::ofstream file_G("G.txt");
-    if (!file_G) {
-        throw std::runtime_error("Unable to write \"G.txt\"");
+    std::vector<double> V(voltageStepsCount + 1);
+    for (size_t i = 0; i < V.size(); ++i) {
+        V[i] = Vstr + (static_cast<double>(i) * dV);
     }
 
-    file_Noise
-            << "Voltage" << SEP
-            << "NOISEep" << SEP
-            << "NOISEs" << SEP
-            << "NOISEa" << SEP
-            << "NOISE" << SEP
-            << "NOISEph" << SEP
-            << "NOISE^2-NOISEph^2" << std::endl;
-    file_Te
-            << "Voltage" << SEP
-            << "Current" << SEP
-            << "Iqp" << SEP
-            << "Iand" << SEP
-            << "V/Rleak" << SEP
-            << "Te" << SEP
-            << "Ts" << SEP
-            << "DeltaT" << SEP
-            << "Peph" << SEP
-            << "Pand" << SEP
-            << "Pleak" << SEP
-            << "Pabs" << SEP
-            << "Pcool" << std::endl;
-    file_NEP
-            << "Voltage" << SEP
-            << "Current" << SEP
-            << "NEPeph" << SEP
-            << "NEPs" << SEP
-            << "NEPa" << SEP
-            << "NEP" << SEP
-            << "NEPph" << SEP
-            << "Sv" << SEP
-            << "NEP^2-NEPph^2" << std::endl;
-    file_G
-            << "Voltage" << SEP
-            << "Ge" << SEP
-            << "Gnis" << std::endl;
-
-    std::valarray<double> I(voltageStepsCount + 1);
-    std::valarray<double> I_A(voltageStepsCount + 1);
-
-    std::vector<IterationResult> results(voltageStepsCount - 1);
-    std::vector<std::thread> threads;
-    const size_t numThreads = std::thread::hardware_concurrency();
-
-    IterationInput baseInput{
-        .DeltaT = DeltaT,
-        .tauSin = tauSin,
-        .Delta = Delta,
-        .Vg = Vg,
-        .Rsin = Rsin,
-        .Rabs = Rabs,
-        .Rleak = Rleak,
-        .I0 = I0,
-        .Sigma = Sigma,
-        .Vol = Vol,
+    // Call shared library's threaded implementation
+    CEBParameters params{
+        .M = bolometersInSeries,
+        .MP = bolometersInParallel,
+        .Pbg = Pbg,
+        .beta = beta,
         .TephPOW = TephPOW,
-        .Tph = Tph,
+        .Vol = Vol,
+        .Z = Sigma,
         .Tc = Tc,
+        .Rn = par["Rn"],
+        .Rleak = Rleak * bolometersInSeries / bolometersInParallel,
         .Wt = Wt,
         .tm = tm,
         .ii = ii,
-        .dT = 0.005,
+        .Ra = Rabs,
+        .Tp = Tph,
+        .F = FREQUENCY,
+        .dF = BANDWIDTH,
+        .dVFinVg = dVFinVg,
+        .dVStartVg = dVStartVg,
         .dV = dV,
-        .bolometersInSeries = bolometersInSeries,
-        .bolometersInParallel = bolometersInParallel,
-        .beta = beta,
-        .dPbg = dPbg,
-        .FREQUENCY = FREQUENCY,
-        .BANDWIDTH = BANDWIDTH,
-        .totalBolometersNumber = totalBolometersNumber,
-        .V = &V
+        .voltage_noise = 0.0,
+        .current_noise = 0.0
     };
 
-    for (size_t i = 0; i < voltageStepsCount - 1; ++i) {
-        threads.emplace_back([i, &baseInput, &results]() {
-            IterationInput input = baseInput;
-            input.voltageStep = i + 1;
-            results[i] = computeIteration(input);
-        });
+    CEBResult resultStruct{};
+    compute_ceb_properties_threaded(&params, &resultStruct);
 
-        if (threads.size() >= numThreads || i == voltageStepsCount - 2) {
-            for (auto& t : threads) {
-                if (t.joinable()) {
-                    t.join();
-                }
-            }
-            threads.clear();
-        }
+    if (resultStruct.error_code != 0) {
+        throw std::runtime_error(resultStruct.error_message);
     }
 
-    std::ranges::sort(results, [](const auto& a, const auto& b) {
-        return a.voltageStep < b.voltageStep;
-    });
-
-    for (const auto& result : results) {
-        I[result.voltageStep] = result.I;
-        I_A[result.voltageStep] = result.I_A;
-
-        Inum[result.voltageStep - 1] = result.Inum;
-        Vnum[result.voltageStep - 1] = result.Vnum;
-
-        file_Te
-                << result.Vnum << SEP
-                << result.Inum << SEP
-                << 1e-9 * result.I * bolometersInParallel << SEP
-                << 1e-9 * result.I_A * bolometersInParallel << SEP
-                << 1e9 * (result.V / Rleak) * bolometersInParallel << SEP
-                << result.Te << SEP
-                << result.Tsin << SEP
-                << result.DeltaT << SEP
-                << result.Pe_ph << SEP
-                << result.Pand << SEP
-                << result.Pleak << SEP
-                << result.Pabs << SEP
-                << result.Pcool << std::endl;
-
-        file_Noise
-                << (2.0 * result.V + 1e-9 * result.I * Rabs) * bolometersInSeries << SEP
-                << 1e9 * std::sqrt(result.NEPe_ph2 * totalBolometersNumber) * std::abs(result.Sv) << SEP
-                << 1e9 * std::sqrt(result.NEPs * totalBolometersNumber) * std::abs(result.Sv) << SEP
-                << 1e9 * std::sqrt(result.NoiA) << SEP
-                << 1e9 * result.NEP * std::abs(result.Sv) << SEP
-                << 1e9 * result.NEPph * std::abs(result.Sv) << SEP
-                << 1e9 * std::abs(result.Sv) * std::sqrt(std::pow(result.NEP, 2) - std::pow(result.NEPph, 2)) << std::endl;
-
-        file_NEP
-                << (2.0 * result.V + 1e-9 * result.I * Rabs) * bolometersInSeries << SEP
-                << 1e-9 * result.I * bolometersInParallel << SEP
-                << 1e-12 * std::sqrt(result.NEPe_ph2 * totalBolometersNumber) << SEP
-                << 1e-12 * std::sqrt(result.NEPs * totalBolometersNumber) << SEP
-                << 1e-12 * std::sqrt(result.NoiA) << SEP
-                << 1e-12 * result.NEP << SEP
-                << 1e-12 * result.NEPph << SEP
-                << 1e12 * std::abs(result.Sv) << SEP
-                << 1e-12 * std::sqrt(std::pow(result.NEP, 2) - std::pow(result.NEPph, 2)) << std::endl;
-
-        file_G
-                << (NUMBER_OF_SINS_IN_CEB * result.V + 1e-9 * (result.I * Rabs)) * bolometersInSeries << SEP
-                << result.G_e << SEP
-                << result.G_NIS << std::endl;
-
-        std::clog
-                << std::setw(static_cast<int>(std::ceil(std::log10(voltageStepsCount)))) << result.voltageStep << '/' <<
-                voltageStepsCount - 1 << ':' << ' '
-                << "V:" << std::setw(12) << result.Vnum << SEP
-                << "I:" << std::setw(12) << result.Inum << SEP
-                << "Sv:" << std::setw(12) << 1e12 * std::abs(result.Sv) << SEP
-                << "Te:" << std::setw(12) << result.Te << SEP
-                << "NEPs:" << std::setw(12) << 1e-12 * std::sqrt(result.NEPs * totalBolometersNumber) << SEP
-                << "NEPt:" << std::setw(12) << 1e-12 * result.NEP << std::endl;
+    // Copy results from CEBResult to member variables
+    for (size_t i = 0; i < resultStruct.Inum.array_size; ++i) {
+        Inum[i] = resultStruct.Inum.data[i];
+        Vnum[i] = resultStruct.Vnum.data[i];
     }
-
-    file_Noise.close();
-    file_Te.close();
-    file_NEP.close();
-    file_G.close();
 
     std::clog
             << "Time spent: " << std::chrono::duration<double>(std::chrono::steady_clock::now() - start)

@@ -342,7 +342,9 @@ class IVParamFitter:
                 tauE = (tauELower + tauEUpper) / 2.0
                 
                 I[voltage_step] = self.model.current_integral(DeltaT, V[voltage_step] / Vg, tauSin, tauE) * I0 + 1e9 * (V[voltage_step] / Rleak)  # [nA]
-                I_A[voltage_step] = ii * self.model.and_current(DeltaT, V[voltage_step] / Vg, tauE, Wt, tm) * I0  # [nA]
+                I_A[voltage_step] = 0.0
+                if ii != 0.0:
+                    I_A[voltage_step] = ii * self.model.and_current(DeltaT, V[voltage_step] / Vg, tauE, Wt, tm) * I0  # [nA]
                 
                 Pe_ph = Sigma * Vol * (np.power(Tph, TephPOW) - np.power(tauE * Delta, TephPOW)) * 1e3  # [pW]
                 Pabs = np.power(I[voltage_step], 2) * Ra * 1e-6  # [pW]

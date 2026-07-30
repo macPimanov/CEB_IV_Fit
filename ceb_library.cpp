@@ -12,68 +12,8 @@
 #include "constants.h"
 #include "CEBNumericModel.h"
 
-// Constants for thread pool
-const size_t DEFAULT_NUM_THREADS = 4;
-
-struct IterationInput {
-    size_t voltageStep;
-    double DeltaT;
-    double tauSin;
-    double Delta;
-    double Vg;
-    double Rsin;
-    double Rabs;
-    double Rleak;
-    double I0;
-    double Sigma;
-    double Vol;
-    double TephPOW;
-    double Tph;
-    double Tc;
-    double Wt;
-    double tm;
-    double ii;
-    double dT;
-    double dV;
-    double bolometersInSeries;
-    double bolometersInParallel;
-    double beta;
-    double dPbg;
-    double FREQUENCY;
-    double BANDWIDTH;
-    double totalBolometersNumber;
-    double voltageNoise;
-    double currentNoise;
-    const double* V;
-};
-
-struct IterationResult {
-    size_t voltageStep;
-    double Vnum;
-    double Inum;
-    double I;
-    double I_A;
-    double V;
-    double Te;
-    double Tsin;
-    double DeltaT;
-    double Pe_ph;
-    double Pand;
-    double Pleak;
-    double Pabs;
-    double Pcool;
-    double NEPe_ph2;
-    double NEPs;
-    double NoiA;
-    double NEPph;
-    double NEP;
-    double Sv;
-    double G_e;
-    double G_NIS;
-};
-
-IterationResult computeIteration(const IterationInput& input) {
-    IterationResult result{};
+CEBLibrary::IterationResult CEBLibrary::computeIteration(const CEBLibrary::IterationInput& input) {
+    CEBLibrary::IterationResult result{};
 
     double Pe_ph, Pabs, Pleak, Pcool, Ps, Pand;
     double tauELower = 0.0;
@@ -256,11 +196,11 @@ void compute_ceb_properties_threaded(const CEBParameters* params, CEBResult* res
             V[i] = Vstr + (static_cast<double>(i) * dV);
         }
 
-        std::vector<IterationResult> results(voltageStepsCount - 1);
+        std::vector<CEBLibrary::IterationResult> results(voltageStepsCount - 1);
         const size_t numThreads = std::thread::hardware_concurrency();
         std::vector<std::thread> threads;
 
-        IterationInput baseInput{
+        CEBLibrary::IterationInput baseInput{
             .DeltaT = DeltaT,
             .tauSin = tauSin,
             .Delta = Delta,
@@ -293,9 +233,9 @@ void compute_ceb_properties_threaded(const CEBParameters* params, CEBResult* res
 
         for (size_t i = 0; i < voltageStepsCount - 1; ++i) {
             threads.emplace_back([i, &baseInput, &results]() {
-                IterationInput input = baseInput;
+                CEBLibrary::IterationInput input = baseInput;
                 input.voltageStep = i + 1;
-                results[i] = computeIteration(input);
+                results[i] = CEBLibrary::computeIteration(input);
             });
 
             if (threads.size() >= numThreads || i == voltageStepsCount - 2) {

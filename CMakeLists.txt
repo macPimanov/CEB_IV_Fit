@@ -4,6 +4,7 @@ project(CEB_IV_Fit LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-error")
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(Threads REQUIRED)
@@ -15,6 +16,7 @@ add_executable(CEB_IV_Fit main.cpp
         IVParamFitter.h IVParamFitter.cpp
         OffsetEliminator.h OffsetEliminator.cpp
         MinimizationAlgorithms.h MinimizationAlgorithms.cpp
+        ceb_library.h ceb_library.cpp
 )
 
 target_link_libraries(CEB_IV_Fit Threads::Threads)
