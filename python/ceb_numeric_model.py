@@ -1,12 +1,15 @@
 import numpy as np
 from scipy import integrate
 from .constants import PhysicsConstants
+from typing import Tuple
 
 class CEBNumericModel:
-    def __init__(self):
+    constants: PhysicsConstants
+    
+    def __init__(self) -> None:
         self.constants = PhysicsConstants()
     
-    def current(self, v, tau):
+    def current(self, v: float, tau: float) -> float:
         a0 = 1.0 + 0.375 * tau - 0.1171875 * np.power(tau, 2)
         a1 = tau * np.power(a0, 2)
         a2 = 1.0 + np.exp((np.abs(v) - 1.0) / tau - (1.15 + tau))
@@ -15,7 +18,7 @@ class CEBNumericModel:
         s = (v >= 0.0) * 2.0 - 1.0
         return s * np.sqrt(2.0 * np.pi * a1 / a2 + a3) * (1.0 / (2.0 * np.exp((1.0 - v) / tau) + 1.0) - 1.0 / (2.0 * np.exp((1.0 + v) / tau) + 1.0))
     
-    def current_integral(self, DT, v, tau, tauE):
+    def current_integral(self, DT: float, v: float, tau: float, tauE: float) -> float:
         dx = self.constants.INTEGRATION_SCALE * DT
         inf = self.constants.ESSENTIALLY_INFINITY_SCALE * DT
         DT2 = np.power(DT, 2)

@@ -21,8 +21,14 @@ class IVParamFitter:
         self.Vexp = None
         self.Inum = None
         self.Vnum = None
+        self.Irex = None
+        self.Vrex = None
         self.par = {}
         self.to_fit = {}
+        self.mins = {}
+        self.maxs = {}
+        self.init_brute = {}
+        self._num_iterations = None
         
         self.amp_constants = self.constants.get_amplifier_constants('AD745')
         self.use_cpp_backend = use_cpp_backend and HAS_CPP_BACKEND
@@ -123,7 +129,7 @@ class IVParamFitter:
         
         try:
             # Calculate chi-squared for display
-            chi_sq = Utils.chi_sq_der(self.Vnum, self.Inum, Irex)
+            chi_sq = Utils.chi_sq(self.Inum, Irex)
             
             # Update data - log scale (left subplot)
             self.line_exp.set_data(Vrex, Irex)
@@ -184,6 +190,9 @@ class IVParamFitter:
             for param_name, param_data in config['parameters'].items():
                 self.par[param_name] = param_data['value']
                 self.to_fit[param_name] = param_data.get('vary', False)
+                self.mins[param_name] = param_data.get('min', 0.0)
+                self.maxs[param_name] = param_data.get('max', 1.0)
+                self.init_brute[param_name] = param_data.get('init_brute', False)
             
             print("Parameters loaded from config:")
             for param_name, value in self.par.items():
@@ -243,22 +252,7 @@ class IVParamFitter:
     def load_experiment_data(self, filename, remove_offset=False):
         self.Iexp, self.Vexp = Utils.load_experimental_data(filename, remove_offset)
         return len(self.Iexp)
-    
-    def __call__(self, param_value, param_name):
-        old_value = self.par[param_name]
-        self.par[param_name] = param_value
-        
-        self.compute_ceb_properties()
-        Irex, Vrex = Utils.resample(self.Iexp, self.Vexp, self.Inum, self.Vnum)
-        
-        result = Utils.chi_sq_der(self.Vnum, self.Inum, Irex)
-        
-        # Update display if enabled
-        self.eval_count += 1
-        self._update_display(Irex, Vrex)
-        
-        self.par[param_name] = old_value
-        return result
+
     
     def _compute_ceb_properties_python(self):
         start_time = time.time()
@@ -574,7 +568,10 @@ class IVParamFitter:
             file_G.close()
     
     def resample(self):
-        return Utils.resample(self.Iexp, self.Vexp, self.Inum, self.Vnum)
+        if self.Vnum is None:
+            raise RuntimeError("Vnum not calculated yet, run computeCEBProperties first")
+        self.Irex, self.Vrex = Utils.resample(self.Iexp, self.Vexp, self.Vnum)
+        return self.Irex, self.Vrex
     
     def sequential_fit(self, run_count=3):
         """Perform sequential fitting using golden section method"""
@@ -607,27 +604,63 @@ class IVParamFitter:
                    
             # Save results
             self._save_fit_results(fmin)
+
+    def _init_brute_params(self):
+        from lmfit import Parameters, minimize as lmfit_minimize
+        params = Parameters()
+        par_seq = []
+        for name, to_init_brute in self.init_brute.items():
+            if to_init_brute:
+                params.add(name, value=self.par[name], vary=True, 
+                            min=self.mins[name],
+                            max=self.maxs[name])
+                par_seq.append(name)
+        if not par_seq:
+            return
+        
+        print(f"Brute-initializing params: {par_seq}")
+        num_brute_iterations = 100
+        self._num_iterations = num_brute_iterations ** len(par_seq)
+        self.eval_count = 0
+        result = lmfit_minimize(self._lmfit_objective, params, method='brute', args=(par_seq,),
+        Ns=100
+        )
+        for name in par_seq:
+            param = result.params[name]
+            print(f"Brute-initialized {name} to: {param.value}")
+            self.par[name] = param.value
+
+        
+        fmin = result.chisqr
+        self._save_fit_results(fmin)
     
+    def _lmfit_objective(self, params, names_to_fit):
+        for name in names_to_fit:
+            self.par[name] = params[name].value
+        
+        self.compute_ceb_properties()
+        
+        # Update display if enabled
+        self.eval_count += 1
+        for name in names_to_fit:
+            if self._num_iterations is not None:
+                print(f"Iteration {self.eval_count}/{self._num_iterations}: fmin {Utils.chi_sq(self.Inum, self.Irex)}")
+            print(f"{name}: {params[name].value}")
+        print()
+
+        self._update_display(self.Irex, self.Vrex)
+        
+        return (self.Inum - self.Irex) / (self.Irex * len(self.Irex))
+
     def lmfit_sequential_fit(self, run_count=3):
         """Perform sequential fitting using lmfit"""
+        self._init_brute_params()
         import random
         from lmfit import Parameters, minimize as lmfit_minimize
         
         # Reset evaluation counter for display
         self.eval_count = 0
         
-        def lmfit_objective(params, names_to_fit):
-            for name in names_to_fit:
-                self.par[name] = params[name].value
-            
-            self.compute_ceb_properties()
-            Irex, Vrex = self.resample()
-            
-            # Update display if enabled
-            self.eval_count += 1
-            self._update_display(Irex, Vrex)
-            
-            return (self.Inum - Irex) / (Irex * len(Irex))
         
         par_seq = [name for name, fit in self.to_fit.items() if fit]
         random.shuffle(par_seq)
@@ -638,9 +671,11 @@ class IVParamFitter:
             params = Parameters()
             for name in par_seq:
                 params.add(name, value=self.par[name], vary=True, 
-                          min=0.5 * self.par[name], max=2.0 * self.par[name])
+                          min=0.5 * self.par[name] if run != 0 else self.mins[name],
+                          max=2.0 * self.par[name] if run != 0 else self.maxs[name])
             
-            result = lmfit_minimize(lmfit_objective, params, args=(par_seq,))
+            self._num_iterations = None
+            result = lmfit_minimize(self._lmfit_objective, params, args=(par_seq,))
             
             fmin = result.chisqr
             nfev = result.nfev
@@ -667,8 +702,8 @@ class IVParamFitter:
     def _compute_current_chi_sq(self):
         if self.Inum is None or self.Vnum is None:
             self.compute_ceb_properties()
-        Irex, Vrex = self.resample()
-        return Utils.chi_sq_der(self.Vnum, self.Inum, Irex)
+            self.resample()
+        return Utils.chi_sq_der(self.Vnum, self.Inum, self.Irex)
     
     def _save_fit_results(self, fmin):
         fitparams_path = self.output_dir / 'fitparameters_new.txt'

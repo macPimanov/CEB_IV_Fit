@@ -1,10 +1,12 @@
 import numpy as np
 from scipy.optimize import minimize, brent
 from lmfit import Parameters, minimize as lmfit_minimize, report_fit
+from typing import Tuple, Callable, Any, List, Optional
+from typing import Sequence
 
 class MinimizationAlgorithms:
     @staticmethod
-    def golden_section_minimization(f, a, b, tolerance=1e-8):
+    def golden_section_minimization(f: Callable[[float], float], a: float, b: float, tolerance: float = 1e-8) -> Tuple[float, float]:
         R = (np.sqrt(5.0) - 1.0) / 2.0
         C = 1.0 - R
         
@@ -32,23 +34,23 @@ class MinimizationAlgorithms:
         return x_min, f_min
     
     @staticmethod
-    def brent_minimization(f, a, b, tolerance=1e-8):
+    def brent_minimization(f: Callable[[float], float], a: float, b: float, tolerance: float = 1e-8) -> Tuple[float, float]:
         result = brent(f, brack=(a, b), tol=tolerance, full_output=True)
         return result[0], result[1]
     
     @staticmethod
-    def scipy_minimize(f, x0, bounds=None, method='L-BFGS-B', tolerance=1e-8):
+    def scipy_minimize(f: Callable[[np.ndarray], float], x0: np.ndarray, bounds: Optional[List[Tuple[float, float]]] = None, method: str = 'L-BFGS-B', tolerance: float = 1e-8) -> Tuple[np.ndarray, float]:
         result = minimize(f, x0, method=method, bounds=bounds, tol=tolerance)
         return result.x, result.fun
     
     @staticmethod
-    def lmfit_minimize(params, objective_func, method='leastsq', tolerance=1e-8):
+    def lmfit_minimize(params: Parameters, objective_func: Callable[[Parameters], Any], method: str = 'leastsq', tolerance: float = 1e-8) -> Tuple[Parameters, float]:
         result = lmfit_minimize(objective_func, params, method=method, tol=tolerance)
         return result.params, result.chisqr
     
     @staticmethod
-    def differential_brent(f, df, a, b, tolerance=1e-8):
-        def combined_obj(x):
+    def differential_brent(f: Callable[[float], float], df: Callable[[float], float], a: float, b: float, tolerance: float = 1e-8) -> Tuple[float, float]:
+        def combined_obj(x: float) -> float:
             fx = f(x)
             dfx = df(x)
             return fx
@@ -57,7 +59,7 @@ class MinimizationAlgorithms:
         return result[0], result[1]
     
     @staticmethod
-    def bracket_minimum(f, a, b, factor=2.0):
+    def bracket_minimum(f: Callable[[float], float], a: float, b: float, factor: float = 2.0) -> Tuple[float, float, float, float, float, float]:
         fa = f(a)
         fb = f(b)
         

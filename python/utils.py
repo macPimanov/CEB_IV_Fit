@@ -1,10 +1,11 @@
 import numpy as np
 import json
 from pathlib import Path
+from typing import Tuple, Any, Dict, Callable, Union
 
 class Utils:
     @staticmethod
-    def load_experimental_data(filename, remove_offset=False):
+    def load_experimental_data(filename: Union[str, Path], remove_offset: bool = False) -> Tuple[np.ndarray, np.ndarray]:
         try:
             data = np.loadtxt(filename, delimiter='\t')
             if data.ndim == 1:
@@ -27,11 +28,9 @@ class Utils:
         return Iexp, Vexp
     
     @staticmethod
-    def resample(Iexp, Vexp, Inum, Vnum):
+    def resample(Iexp: np.ndarray, Vexp: np.ndarray, Vnum: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         if len(Iexp) != len(Vexp):
             raise ValueError("Experimental I and V must be of the same size")
-        if len(Inum) != len(Vnum):
-            raise ValueError("Numeric I and V must be of the same size")
         
         countnum = len(Vnum)
         countexp = len(Vexp)
@@ -60,13 +59,13 @@ class Utils:
         return Irex, Vrex
     
     @staticmethod
-    def chi_sq(Inum, Irex):
+    def chi_sq(Inum: np.ndarray, Irex: np.ndarray) -> float:
         if len(Inum) != len(Irex):
             raise ValueError("Numeric I and Recalculated I must be of the same size")
         return np.sum(np.power((Inum - Irex) / Irex, 2)) / len(Inum)
     
     @staticmethod
-    def chi_sq_hi(Inum, Irex):
+    def chi_sq_hi(Inum: np.ndarray, Irex: np.ndarray) -> float:
         if len(Inum) != len(Irex):
             raise ValueError("Numeric I and Recalculated I must be of the same size")
         
@@ -77,7 +76,7 @@ class Utils:
         return 1e8 * sum_val / countnum
     
     @staticmethod
-    def chi_sq_der(Vnum, Inum, Irex, return_array=False):
+    def chi_sq_der(Vnum: np.ndarray, Inum: np.ndarray, Irex: np.ndarray, return_array: bool = False) -> float:
         if len(Inum) != len(Vnum):
             raise ValueError("Numeric I and V must be of the same size")
         if len(Inum) != len(Irex):
@@ -94,7 +93,7 @@ class Utils:
         return chi2 + chi2_der
     
     @staticmethod
-    def write_iv(filename, I, V):
+    def write_iv(filename: Union[str, Path], I: np.ndarray, V: np.ndarray) -> None:
         if len(I) != len(V):
             raise ValueError("I and V must be of the same size")
         
@@ -102,7 +101,7 @@ class Utils:
         np.savetxt(filename, data, delimiter='\t')
     
     @staticmethod
-    def eliminate_offset(Iexp, Vexp):
+    def eliminate_offset(Iexp: np.ndarray, Vexp: np.ndarray) -> float:
         dOffset = 0.0
         dLBound = -0.0005
         dRBound = 0.0005
@@ -115,7 +114,7 @@ class Utils:
         return dOffset
     
     @staticmethod
-    def symmetrize_measure(Iexp, Vexp):
+    def symmetrize_measure(Iexp: np.ndarray, Vexp: np.ndarray) -> float:
         if not np.all(Iexp[:-1] <= Iexp[1:]):
             raise RuntimeError("I doesn't rise monotonously")
         
@@ -153,7 +152,7 @@ class Utils:
         return Utils.chi_sq_hi(Ilow, Irex)
     
     @staticmethod
-    def golden_minimize(f, a, b, x_initial, tolerance=1e-8):
+    def golden_minimize(f: Callable[[float], float], a: float, b: float, x_initial: float, tolerance: float = 1e-8) -> float:
         R = (np.sqrt(5.0) - 1.0) / 2.0
         C = 1.0 - R
         
@@ -184,18 +183,18 @@ class Utils:
         return x1 if f1 < f2 else x2
     
     @staticmethod
-    def load_json_config(filename):
+    def load_json_config(filename: Union[str, Path]) -> Dict[str, Any]:
         with open(filename, 'r') as f:
             return json.load(f)
     
     @staticmethod
-    def save_json_config(filename, config):
+    def save_json_config(filename: Union[str, Path], config: Dict[str, Any]) -> None:
         with open(filename, 'w') as f:
             json.dump(config, f, indent=4)
     
     @staticmethod
-    def create_sample_config():
-        sample_config = {
+    def create_sample_config() -> Dict[str, Any]:
+        sample_config: Dict[str, Any] = {
             "data_file": "SPC-CEB_300mK_Triton11-2026.txt",
             "amp_type": "AD745",
             "sep": "\t",

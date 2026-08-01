@@ -41,6 +41,7 @@ CEBLibrary::IterationResult CEBLibrary::computeIteration(const CEBLibrary::Itera
         Pcool *= std::pow(input.Vg, 2) / input.Rsin * 1e12;
         Ps *= std::pow(input.Vg, 2) / input.Rsin * 1e12;
 
+        // std::cout << "VSHAMPOR: dPbg is " << input.dPbg << std::endl;
         const double Pheat = Pe_ph + Pabs + Pand + input.dPbg + 2.0 * input.beta * Ps + Pleak;
         if (Pheat < NUMBER_OF_SINS_IN_CEB * Pcool) {
             tauEUpper = tauE;
@@ -165,7 +166,7 @@ void compute_ceb_properties_threaded(const CEBParameters* params, CEBResult* res
         const double Tsin = Tph;
 
         const double DeltaT = std::sqrt(1.0 - std::pow(Tsin / Tc, 3.2));
-        const double dPbg = Pbg;
+        const double dPbg = Pbg; // (... / totalBolometersNumber? )
         const double Delta = (BCS_INTEGRAL * Tc);
 
         const double Rsin = (Rn - Rabs) / NUMBER_OF_SINS_IN_CEB;
@@ -315,14 +316,6 @@ void compute_ceb_properties_threaded(const CEBParameters* params, CEBResult* res
             result->Sv.data[i] = res.Sv;
             result->G_e.data[i] = res.G_e;
             result->G_NIS.data[i] = res.G_NIS;
-            
-            std::clog << std::setw(3) << res.voltageStep << '/' << voltageStepsCount - 1 << ": "
-                      << "V:" << std::setw(12) << res.Vnum << "\t"
-                      << "I:" << std::setw(12) << res.Inum << "\t"
-                      << "Sv:" << std::setw(12) << 1e12 * std::abs(res.Sv) << "\t"
-                      << "Te:" << std::setw(12) << res.Te << "\t"
-                      << "NEPs:" << std::setw(12) << 1e-12 * std::sqrt(res.NEPs * totalBolometersNumber) << "\t"
-                      << "NEPt:" << std::setw(12) << 1e-12 * res.NEP << '\n';
         }
 
         result->time_spent = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
