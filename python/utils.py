@@ -146,7 +146,7 @@ class Utils:
         Utils.write_iv("IV low.txt", Ilow, Vlow)
         Utils.write_iv("IV high.txt", Ihigh, Vhigh)
         
-        Irex, Vrex = Utils.resample(Ihigh, Vhigh, Ilow, Vlow)
+        Irex, Vrex = Utils.resample(Ihigh, Vhigh, Vlow)
         Utils.write_iv("IV rex.txt", Irex, Vrex)
         
         return Utils.chi_sq_hi(Ilow, Irex)
