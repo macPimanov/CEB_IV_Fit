@@ -113,7 +113,7 @@ lib.free_ceb_result.argtypes = [ctypes.POINTER(CEBResult)]
 lib.free_ceb_result.restype = None
 
 
-def compute_ceb_properties_threaded(params_dict, amp_noise=None):
+def compute_ceb_properties_threaded(params_dict: dict, amp_noise: dict = None) -> dict:
     """
     Compute CEB properties using threaded C++ library.
     
@@ -216,7 +216,7 @@ def compute_ceb_properties_threaded(params_dict, amp_noise=None):
     }
     
     # Helper function to safely convert optional arrays
-    def safe_convert_array(array_struct):
+    def safe_convert_array(array_struct) -> object:
         if array_struct.data is not None and array_struct.array_size > 0:
             return np.ctypeslib.as_array(
                 ctypes.cast(array_struct.data, ctypes.POINTER(ctypes.c_double)),
@@ -250,7 +250,7 @@ def compute_ceb_properties_threaded(params_dict, amp_noise=None):
     return result_dict
 
 
-def get_amp_constants(amp_type='AD745'):
+def get_amp_constants(amp_type: str = 'AD745') -> dict:
     """
     Get amplifier noise constants for different amplifier types.
     

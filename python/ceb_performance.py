@@ -7,6 +7,7 @@ that uses a threaded C++ implementation for significant speedup.
 
 import os
 from pathlib import Path
+from typing import Optional, Dict, Any
 
 try:
     from .ceb_bindings import compute_ceb_properties_threaded, get_amp_constants
@@ -16,12 +17,12 @@ except ImportError as e:
     HAS_CPP_BACKEND = False
 
 
-def is_cpp_backend_available():
+def is_cpp_backend_available() -> bool:
     """Check if C++ threaded backend is available."""
     return HAS_CPP_BACKEND
 
 
-def compute_ceb_properties(fitter_instance, use_cpp=True):
+def compute_ceb_properties(fitter_instance: Any, use_cpp: bool = True) -> Dict[str, Any]:
     """
     Compute CEB properties using the fastest available backend.
     
@@ -38,7 +39,7 @@ def compute_ceb_properties(fitter_instance, use_cpp=True):
         return _compute_python(fitter_instance)
 
 
-def _compute_cpp(fitter_instance):
+def _compute_cpp(fitter_instance: Any) -> Dict[str, Any]:
     """Use C++ threaded backend for computation."""
     # Prepare parameters dictionary for C++ library
     params = fitter_instance.par.copy()
@@ -59,7 +60,7 @@ def _compute_cpp(fitter_instance):
     return result
 
 
-def _compute_python(fitter_instance):
+def _compute_python(fitter_instance: Any) -> Dict[str, Any]:
     """Fallback to pure Python implementation."""
     import time
     start_time = time.time()
@@ -77,7 +78,7 @@ def _compute_python(fitter_instance):
     }
 
 
-def patch_fitter(fitter_instance):
+def patch_fitter(fitter_instance: Any) -> Any:
     """
     Patch an IVParamFitter instance to use high-performance backend.
     
@@ -101,7 +102,7 @@ def patch_fitter(fitter_instance):
     return fitter_instance
 
 
-def _compute_patch(fitter_instance):
+def _compute_patch(fitter_instance: Any) -> int:
     """Patched compute method that dispatches to C++ backend."""
     result = _compute_cpp(fitter_instance)
     return len(result['Inum']) + 1  # Return voltage steps count

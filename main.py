@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from python.iv_param_fitter import IVParamFitter
 from python.utils import Utils
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(
         description='CEB IV Curve Fitting - Python Implementation',
         epilog='Example: python main.py --display --method lmfit --runs 2'

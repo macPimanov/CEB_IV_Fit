@@ -9,7 +9,7 @@ import json
 import argparse
 from pathlib import Path
 
-def convert_txt_to_json(txt_file, json_output_file):
+def convert_txt_to_json(txt_file: str, json_output_file: str) -> dict:
     """
     Convert old startparams.txt format to JSON configuration.
     
@@ -104,7 +104,7 @@ def convert_txt_to_json(txt_file, json_output_file):
     
     return config
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(description='Convert startparams.txt to JSON configuration format')
     parser.add_argument('input_file', type=str, help='Input startparams.txt file')
     parser.add_argument('output_file', type=str, nargs='?', 

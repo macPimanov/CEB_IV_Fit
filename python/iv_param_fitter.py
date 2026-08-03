@@ -14,7 +14,7 @@ except ImportError:
     HAS_CPP_BACKEND = False
 
 class IVParamFitter:
-    def __init__(self, config_file=None, use_cpp_backend=True, display=False, output_dir="."):
+    def __init__(self, config_file: str = None, use_cpp_backend: bool = True, display: bool = False, output_dir: str = "."):
         self.model = CEBNumericModel()
         self.constants = PhysicsConstants()
         self.Iexp = None
@@ -58,10 +58,10 @@ class IVParamFitter:
         else:
             self.load_default_parameters()
     
-    def set_output_dir(self, output_dir):        
+    def set_output_dir(self, output_dir: str) -> None:        
         self.output_dir = Path(output_dir)
 
-    def _setup_display(self):
+    def _setup_display(self) -> None:
         """Setup matplotlib display for fitting visualization."""
         try:
             import matplotlib.pyplot as plt
@@ -119,7 +119,7 @@ class IVParamFitter:
             self.ax_lin = None
             self.plt = None
     
-    def _update_display(self, Irex, Vrex):
+    def _update_display(self, Irex, Vrex) -> None:
         """Update the display with current IV curves."""
         if not self.display or self.fig is None:
             return
@@ -159,7 +159,7 @@ class IVParamFitter:
         except Exception as e:
             print(f"Error updating display: {e}")
     
-    def _close_display(self):
+    def _close_display(self) -> None:
         """Close the display window."""
         if not self.display or self.fig is None:
             return
@@ -175,7 +175,7 @@ class IVParamFitter:
         except Exception as e:
             print(f"Error closing display: {e}")
     
-    def load_config(self, config_file):
+    def load_config(self, config_file: str) -> None:
         config = Utils.load_json_config(config_file)
         
         if 'data_file' in config:
@@ -198,7 +198,7 @@ class IVParamFitter:
             for param_name, value in self.par.items():
                 print(f"{param_name} = {value:.6f}, to fit = {self.to_fit[param_name]}")
     
-    def save_config(self, config_file):
+    def save_config(self, config_file: str) -> None:
         config = {
             'data_file': getattr(self, 'data_file', "SPC-CEB_300mK_Triton11-2026.txt"),
             'amp_type': 'AD745',  # Default, could be stored
@@ -213,7 +213,7 @@ class IVParamFitter:
         
         Utils.save_json_config(config_file, config)
     
-    def load_default_parameters(self):
+    def load_default_parameters(self) -> None:
         default_params = {
             'Pbg': 0.0,
             'beta': 0.111,
@@ -249,12 +249,12 @@ class IVParamFitter:
         for param_name, value in self.par.items():
             print(f"{param_name} = {value:.6f}, to fit = {self.to_fit[param_name]}")
     
-    def load_experiment_data(self, filename, remove_offset=False):
+    def load_experiment_data(self, filename: str, remove_offset: bool = False) -> int:
         self.Iexp, self.Vexp = Utils.load_experimental_data(filename, remove_offset)
         return len(self.Iexp)
 
     
-    def _compute_ceb_properties_python(self):
+    def _compute_ceb_properties_python(self) -> int:
         start_time = time.time()
         
         # Physical parameters
@@ -440,14 +440,14 @@ class IVParamFitter:
         print(f"Time spent: {time.time() - start_time:.2f} seconds")
         return voltage_steps - 1
     
-    def compute_ceb_properties(self):
+    def compute_ceb_properties(self) -> int:
         """Compute CEB properties using the fastest available backend."""
         if self.use_cpp_backend and HAS_CPP_BACKEND:
             return self._compute_ceb_properties_cpp()
         else:
             return self._compute_ceb_properties_python()
     
-    def _compute_ceb_properties_cpp(self):
+    def _compute_ceb_properties_cpp(self) -> int:
         """Use C++ threaded backend for computation and write output files."""
         import time
         
@@ -475,7 +475,7 @@ class IVParamFitter:
         print(f"Time spent: {result['time_spent']:.2f} seconds")
         return len(result['Inum']) + 1
     
-    def _write_output_files(self, result, params):
+    def _write_output_files(self, result, params) -> None:
         """Write CEB output files from computed result data."""
         import os
         import datetime
@@ -567,13 +567,13 @@ class IVParamFitter:
                 file_G.write(f"{self.Vnum[i]:.6e}\t0.0\n")
             file_G.close()
     
-    def resample(self):
+    def resample(self) -> tuple:
         if self.Vnum is None:
             raise RuntimeError("Vnum not calculated yet, run computeCEBProperties first")
         self.Irex, self.Vrex = Utils.resample(self.Iexp, self.Vexp, self.Vnum)
         return self.Irex, self.Vrex
     
-    def sequential_fit(self, run_count=3):
+    def sequential_fit(self, run_count: int = 3) -> None:
         """Perform sequential fitting using golden section method"""
         import random
         
@@ -589,7 +589,7 @@ class IVParamFitter:
             for param_name in par_seq:
                 current_value = self.par[param_name]
                 
-                def objective(param_value):
+                def objective(param_value: float) -> float:
                     return self(param_value, param_name)
                 
                 lower_bound = 0.5 * current_value
@@ -605,7 +605,7 @@ class IVParamFitter:
             # Save results
             self._save_fit_results(fmin)
 
-    def _init_brute_params(self):
+    def _init_brute_params(self) -> None:
         from lmfit import Parameters, minimize as lmfit_minimize
         params = Parameters()
         par_seq = []
@@ -634,7 +634,7 @@ class IVParamFitter:
         fmin = result.chisqr
         self._save_fit_results(fmin)
     
-    def _lmfit_objective(self, params, names_to_fit):
+    def _lmfit_objective(self, params, names_to_fit) -> np.ndarray:
         for name in names_to_fit:
             self.par[name] = params[name].value
         
@@ -652,7 +652,7 @@ class IVParamFitter:
         
         return (self.Inum - self.Irex) / (self.Irex * len(self.Irex))
 
-    def lmfit_sequential_fit(self, run_count=3):
+    def lmfit_sequential_fit(self, run_count: int = 3) -> None:
         """Perform sequential fitting using lmfit"""
         self._init_brute_params()
         import random
@@ -699,13 +699,13 @@ class IVParamFitter:
             # Save results
             self._save_fit_results(fmin)
     
-    def _compute_current_chi_sq(self):
+    def _compute_current_chi_sq(self) -> float:
         if self.Inum is None or self.Vnum is None:
             self.compute_ceb_properties()
             self.resample()
         return Utils.chi_sq_der(self.Vnum, self.Inum, self.Irex)
     
-    def _save_fit_results(self, fmin):
+    def _save_fit_results(self, fmin: float) -> None:
         fitparams_path = self.output_dir / 'fitparameters_new.txt'
         append_newline = fitparams_path.exists() and fitparams_path.stat().st_size > 0
         
