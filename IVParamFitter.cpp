@@ -2,18 +2,26 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <numeric>
 #include <random>
+#include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "constants.h"
 #include "utils.h"
 #include "CEBNumericModel.h"
 #include "MinimizationAlgorithms.h"
+#include "ceb_library.h"
 
 #include "IVParamFitter.h"
+
+using CEBLibrary::IterationInput;
+using CEBLibrary::IterationResult;
+using CEBLibrary::computeIteration;
 
 IVParamFitter::IVParamFitter() {
     /*
@@ -29,7 +37,9 @@ IVParamFitter::IVParamFitter() {
             par[parname] = parvalue;
             ToFit[parname] = parfit;
 
-            std::clog << std::left << std::setw(18) << std::format("{} = {},", parname, parvalue)
+            std::ostringstream oss;
+            oss << std::left << std::setw(18) << parname << " = " << parvalue << ",";
+            std::clog << oss.str()
                     << std::internal << "to fit = " << std::boolalpha << parfit
                     << std::endl;
         }
@@ -87,11 +97,17 @@ void IVParamFitter::SeqFit(const size_t runCount, const std::valarray<double>& I
             if (appendNewLine) {
                 params << std::endl;
             }
-            params << std::format("time = {}", std::chrono::system_clock::now()) << std::endl;
-            for (const auto& [parname, parvalue]: par)
-                params << std::format("{} = {} ({})", parname, parvalue,
-                                      ToFit[parname] ? std::string("fit") : std::string("skip")) << std::endl;
-            params << std::format("fmin = {}", fmin) << std::endl;
+            std::ostringstream oss;
+            oss << "time = " << std::chrono::system_clock::now();
+            params << oss.str() << std::endl;
+            for (const auto& [parname, parvalue]: par) {
+                std::ostringstream oss2;
+                oss2 << parname << " = " << parvalue << " (" << (ToFit[parname] ? std::string("fit") : std::string("skip")) << ")";
+                params << oss2.str() << std::endl;
+            }
+            std::ostringstream oss3;
+            oss3 << "fmin = " << fmin;
+            params << oss3.str() << std::endl;
             params.close();
         } else {
             throw std::runtime_error("Unable to append to \"fitparameters_new.txt\"");
@@ -151,6 +167,10 @@ size_t IVParamFitter::computeCEBProperties() {
     const double Rabs = par["Ra"];
     // phonon temperature [K]
     const double Tph = par["Tp"];
+    // main frequency [GHz]
+    const double FREQUENCY = par["F"];
+    // bandwidth [GHz]
+    const double BANDWIDTH = par["dF"];
     // voltage range end [V]
     const double dVFinVg = par["dVFinVg"];
     // voltage range start [V]
@@ -165,14 +185,9 @@ size_t IVParamFitter::computeCEBProperties() {
 
     const double DeltaT = std::sqrt(1.0 - std::pow(Tsin / Tc, 3.2));
     // incoming power per 1 bolometer [pW]
-    const double dPbg = Pbg / totalBolometersNumber;
+    const double dPbg = Pbg /*/ totalBolometersNumber*/;
     // energy gap [K], Vg[eV] = Tc * BCS_INTEGRAL * 86.25e-6
-    const double Delta = BCS_INTEGRAL * Tc; // [K]
-
-    // if there is a file named “Te.txt”, backup its content into “Te_old.txt”
-    if (std::filesystem::exists("Te.txt")) {
-        std::filesystem::rename("Te.txt", "Te_old.txt");
-    }
+    const double Delta = (BCS_INTEGRAL * Tc); // [K]
 
     //---------- normalized constants
     // leave only the resistance of SIN junctions
@@ -200,262 +215,187 @@ size_t IVParamFitter::computeCEBProperties() {
     Inum.resize(voltageStepsCount - 1);
     Vnum.resize(voltageStepsCount - 1);
 
-    std::valarray<double> V(voltageStepsCount + 1); // [V]
-    std::ranges::iota(V, 0);
-    V = Vstr + (V * dV);
-
-    std::ofstream file_Noise("Noise.txt");
-    if (!file_Noise) {
-        throw std::runtime_error("Unable to write \"file_Noise.txt\"");
-    }
-    std::ofstream file_Te("Te.txt");
-    if (!file_Te) {
-        throw std::runtime_error("Unable to write \"file_Te.txt\"");
-    }
-    std::ofstream file_NEP("NEP.txt");
-    if (!file_NEP) {
-        throw std::runtime_error("Unable to write \"NEP.txt\"");
-    }
-    std::ofstream file_G("G.txt");
-    if (!file_G) {
-        throw std::runtime_error("Unable to write \"G.txt\"");
+    std::vector<double> V(voltageStepsCount + 1);
+    for (size_t i = 0; i < V.size(); ++i) {
+        V[i] = Vstr + (static_cast<double>(i) * dV);
     }
 
-    file_Noise
-            << "Voltage" << SEP
-            << "NOISEep" << SEP
-            << "NOISEs" << SEP
-            << "NOISEa" << SEP
-            << "NOISE" << SEP
-            << "NOISEph" << SEP
-            << "NOISE^2-NOISEph^2" << std::endl;
-    file_Te
-            << "Voltage" << SEP
-            << "Current" << SEP
-            << "Iqp" << SEP
-            << "Iand" << SEP
-            << "V/Rleak" << SEP
-            << "Te" << SEP
-            << "Ts" << SEP
-            << "DeltaT" << SEP
-            << "Pand" << SEP
-            << "Pleak" << SEP
-            << "Pabs" << SEP
-            << "Pcool" << std::endl;
-    file_NEP
-            << "Voltage" << SEP
-            << "Current" << SEP
-            << "NEPeph" << SEP
-            << "NEPs" << SEP
-            << "NEPa" << SEP
-            << "NEP" << SEP
-            << "NEPph" << SEP
-            << "Sv" << SEP
-            << "NEP^2-NEPph^2" << std::endl;
-    file_G
-            << "Voltage" << SEP
-            << "Ge" << SEP
-            << "Gnis" << std::endl;
+    // Call shared library's threaded implementation
+    CEBParameters params{
+        .M = bolometersInSeries,
+        .MP = bolometersInParallel,
+        .Pbg = Pbg,
+        .beta = beta,
+        .TephPOW = TephPOW,
+        .Vol = Vol,
+        .Z = Sigma,
+        .Tc = Tc,
+        .Rn = par["Rn"],
+        .Rleak = Rleak * bolometersInSeries / bolometersInParallel,
+        .Wt = Wt,
+        .tm = tm,
+        .ii = ii,
+        .Ra = Rabs,
+        .Tp = Tph,
+        .F = FREQUENCY,
+        .dF = BANDWIDTH,
+        .dVFinVg = dVFinVg,
+        .dVStartVg = dVStartVg,
+        .dV = dV,
+        .voltage_noise = 0.0,
+        .current_noise = 0.0
+    };
 
-    std::valarray<double> I(voltageStepsCount + 1);
-    std::valarray<double> I_A(voltageStepsCount + 1);
+    CEBResult resultStruct{};
+    compute_ceb_properties_threaded(&params, &resultStruct);
 
-    for (size_t voltageStep = 1; voltageStep < voltageStepsCount; ++voltageStep) // next voltage; exclude edges
-    {
-        constexpr double dT = 0.005; // temperature step for derivative calculations
-
-        double Pabs, Pleak, Pcool, Ps, Pand; // for power
-
-        // for (size_t n = 0; n < 5; ++n) // next interation
-        // {
-        double tauELower = 0.0; // dimentionless
-        double tauEUpper = 3.0 / BCS_INTEGRAL; // dimentionless
-
-        // find tauE so that Pheat == NUMBER_OF_SINS_IN_CEB * Pcool
-        for (size_t l = 0; l < 15; ++l)
-        // next iteration; TODO: check with Leonid's old version to see how this is different from `n` above
-        {
-            tauE = (tauELower + tauEUpper) / 2.0;
-
-            I[voltageStep] = currentIntegral(DeltaT, V[voltageStep] / Vg, tauSin, tauE) * I0 + 1e9 * (
-                                 V[voltageStep] / Rleak); // [nA]
-
-            I_A[voltageStep] = ii * AndCurrent(DeltaT, V[voltageStep] / Vg, tauE, Wt, tm) * I0; // [nA]
-
-            const double Pe_ph = Sigma * Vol
-                                 * (std::pow(Tph, TephPOW)
-                                    - std::pow(tauE * Delta, TephPOW))
-                                 * 1e3; // [pW]
-
-            Pabs = std::pow(I[voltageStep], 2) * Rabs * 1e-6; // [pW]
-
-            Pleak = NUMBER_OF_SINS_IN_CEB * std::pow(V[voltageStep], 2) / Rleak * 1e12; // [pW]
-
-            Pand = std::pow(I_A[voltageStep] * 1e-3 /*[uA]*/, 2) * Rabs /*[Ohm]*/
-                   + 2.0/*TODO*/ * (I_A[voltageStep] * 1e3) /*[pA]*/ * V[voltageStep] /*[V]*/;
-            // [pW], absorber + Andreev
-
-            std::tie(Pcool, Ps) = PowerCoolInt(DeltaT, V[voltageStep] / Vg, tauSin, tauE);
-
-            Pcool *= std::pow(Vg, 2) / Rsin * 1e12; // [pW]
-            Ps *= std::pow(Vg, 2) / Rsin * 1e12; // [pW], returning power from S to N
-
-            if (const double Pheat = Pe_ph + Pabs + Pand + dPbg + 2.0/*TODO*/ * beta * Ps + Pleak;
-                Pheat < NUMBER_OF_SINS_IN_CEB * Pcool) {
-                tauEUpper = tauE;
-            } else {
-                tauELower = tauE;
-            }
-        }
-        // }
-
-        Te = tauE * Delta;
-
-        Inum[voltageStep - 1] = 1e-9 * (I[voltageStep] + I_A[voltageStep]) * bolometersInParallel;
-        Vnum[voltageStep - 1] = (NUMBER_OF_SINS_IN_CEB * V[voltageStep] + 1e-9 * (I[voltageStep] + I_A[voltageStep]) *
-                                 Rabs) * bolometersInSeries;
-
-        file_Te
-                << Vnum[voltageStep - 1] << SEP
-                << Inum[voltageStep - 1] << SEP
-                << 1e-9 * I[voltageStep] * bolometersInParallel << SEP
-                << 1e-9 * I_A[voltageStep] * bolometersInParallel << SEP
-                << 1e9 * (V[voltageStep] / Rleak) * bolometersInParallel << SEP
-                << Te << SEP
-                << Tsin << SEP
-                << DeltaT << SEP
-                << Pand << SEP
-                << Pleak << SEP
-                << Pabs << SEP
-                << Pcool << std::endl;
-
-        //----- NEP ----------------------------------------------
-
-        const double dPT = std::get<0>(PowerCoolInt(DeltaT, V[voltageStep] / Vg, tauSin, tauE + dT / Delta))
-                           - std::get<0>(PowerCoolInt(DeltaT, V[voltageStep] / Vg, tauSin, tauE - dT / Delta));
-
-        const double dPdT = 1e12 * (std::pow(Vg, 2) / Rsin) * dPT / (2.0 * dT); // [pW/K]
-
-        const double dIdT = I0
-                            * (currentIntegral(DeltaT, V[voltageStep] / Vg, tauSin, tauE + dT / Delta)
-                               - currentIntegral(DeltaT, V[voltageStep] / Vg, tauSin, tauE - dT / Delta))
-                            / (2.0 * dT); // [nA/K]
-
-        const double dIdV = I0
-                            * (currentIntegral(DeltaT, V[voltageStep + 1] / Vg, tauSin, tauE)
-                               + ii * AndCurrent(DeltaT, V[voltageStep + 1] / Vg, tauE, Wt, tm)
-                               - currentIntegral(DeltaT, V[voltageStep - 1] / Vg, tauSin, tauE)
-                               - ii * AndCurrent(DeltaT, V[voltageStep - 1] / Vg, tauE, Wt, tm))
-                            / (2.0 * dV); // [nA/V]
-
-        const double dPdV = std::pow(Vg, 2) / Rsin * 1e12
-                            * (std::get<0>(PowerCoolInt(DeltaT, V[voltageStep + 1] / Vg, tauSin, tauE))
-                               - std::get<0>(PowerCoolInt(DeltaT, V[voltageStep - 1] / Vg, tauSin, tauE)))
-                            / (2.0 * dV); // [pW/V]
-
-        // heat conductance
-        const double G_NIS = dPdT; // after eq. (10)
-        const double G_e = 5.0 * Sigma * Vol * std::pow(Te, 4) * 1e3; // [pW/K], after eq. (10)
-
-        const double G = G_e + NUMBER_OF_SINS_IN_CEB * (G_NIS - dIdT / dIdV * dPdV); // [pW/K]
-
-        // the responsivity in the current biased regime, eq. (30)
-        const double Sv = -2.0 * dIdT / dIdV / G / bolometersInParallel; // [V/pW], for 1 bolo
-
-        // NEPe_ph squared, eq. (24)
-        const double NEPe_ph2 = 10.0 * (E * K) * Sigma * Vol * (std::pow(Tph, TephPOW) + std::pow(Te, TephPOW)) * 1e3
-                                * 1e12; // [pW²/Hz]
-
-        // amplifier noise
-        const double NoiA = std::pow(VOLTAGE_NOISE_2_AMPS, 2)
-                            + std::pow(
-                                CURRENT_NOISE_2_AMPS * (2.0 * 1e9 / dIdV + Rabs) * bolometersInSeries /
-                                bolometersInParallel,
-                                2); // [V²/Hz]
-
-        const double NEPa = NoiA / std::pow(Sv, 2); // [pW²/Hz]
-
-        //----- NEP SIN approximation ----------------------------
-
-        const double dI = 1e9 * (2.0 * E * std::abs(I[voltageStep]) / std::pow(dIdV * Sv, 2)); // [pW²/Hz]
-
-        const double dPdI = 1e9 * (2.0 * 2.0 * E * Pcool / (dIdV * Sv));
-        // [pW²/Hz], second '2' is from comparison with integral
-
-        const double mm =
-                std::log(std::sqrt(2.0 * M_PI * K * Te * Vg) / (2.0 * std::abs(I[voltageStep]) * Rsin * 1e-9));
-
-        const double dP = (0.5 + std::pow(mm, 2)) * std::pow(K * Te, 2) * std::abs(I[voltageStep]) * E * 1e-9
-                          * 1e24; // [pW²/Hz]
-
-        const double NEPs = NUMBER_OF_SINS_IN_CEB * (dI - 2.0 * dPdI + dP); // [pW²/Hz], all terms positive
-
-        //----- NEP SIN integral ---------------------------------
-        /*
-		mm = NEPInt(DeltaT, V[j] / Vg, tau, tauE, &dI, &dP, &dPdI);
-
-		dI = EL * I0 * dI / std::pow(dIdV * Sv, 2) * 1e9;			// [pW²/Hz]
-
-		dPdI = dPdI / (dIdV * Sv) * EL * std::pow(Vg, 2) / Rsin * 1e12 * 1e9;	// [pW²/Hz]
-
-		dP *= std::pow(Vg, 3) / Rsin * EL * 1e24;			// [pW²/Hz]
-
-		NEPs = NUMBER_OF_SINS_IN_CEB * (dI - 2.0 * dPdI + dP);				// [pW²/Hz], all terms positive
-        */
-        //--------------------------------------------------------
-
-        const double NEPph = 1e-6 * (Pbg * totalBolometersNumber);
-        // [pW/sqrt(Hz)], at 0 GHz
-
-        // const double NEPph = 1e12 * std::sqrt(totalBolometersNumber * 2.0 * 1e9 * Pbg * 350.0 * 1e-12 * H + std::pow(1e-12 * Pbg * totalBolometersNumber, 2) / 1.552 / 1e9);	// [pW/sqrt(Hz)], at 350 GHz
-
-        const double NEP = std::sqrt((NEPe_ph2 + NEPs) * totalBolometersNumber + NEPa + std::pow(NEPph, 2));
-        //all squares
-
-        file_Noise
-                << (2.0 * V[voltageStep] + 1e-9 * I[voltageStep] * Rabs) * bolometersInSeries << SEP
-                << 1e9 * std::sqrt(NEPe_ph2 * totalBolometersNumber) * std::abs(Sv) << SEP
-                << 1e9 * std::sqrt(NEPs * totalBolometersNumber) * std::abs(Sv) << SEP
-                << 1e9 * std::sqrt(NoiA) << SEP
-                << 1e9 * NEP * std::abs(Sv) << SEP
-                << 1e9 * NEPph * std::abs(Sv) << SEP
-                << 1e9 * std::abs(Sv) * std::sqrt(std::pow(NEP, 2) - std::pow(NEPph, 2)) << std::endl;
-
-        file_NEP
-                << (2.0 * V[voltageStep] + 1e-9 * I[voltageStep] * Rabs) * bolometersInSeries << SEP
-                << 1e-9 * I[voltageStep] * bolometersInParallel << SEP
-                << 1e-12 * std::sqrt(NEPe_ph2 * totalBolometersNumber) << SEP
-                << 1e-12 * std::sqrt(NEPs * totalBolometersNumber) << SEP
-                << 1e-12 * std::sqrt(NEPa) << SEP
-                << 1e-12 * NEP << SEP
-                << 1e-12 * NEPph << SEP
-                << 1e12 * std::abs(Sv) << SEP
-                << 1e-12 * std::sqrt(std::pow(NEP, 2) - std::pow(NEPph, 2)) << std::endl;
-
-        file_G
-                << (NUMBER_OF_SINS_IN_CEB * V[voltageStep] + 1e-9 * (I[voltageStep] * Rabs)) * bolometersInSeries << SEP
-                << G_e << SEP
-                << G_NIS << std::endl;
-
-        std::clog
-                << std::setw(static_cast<int>(std::ceil(std::log10(voltageStepsCount)))) << voltageStep << '/' <<
-                voltageStepsCount - 1 << ':' << SEP
-                << "Voltage: " << std::setw(12) << Vnum[voltageStep - 1] << SEP
-                << "Current: " << std::setw(12) << Inum[voltageStep - 1] << SEP
-                << "Sv: " << std::setw(12) << 1e12 * std::abs(Sv) << SEP
-                << "Te: " << std::setw(12) << Te << SEP
-                << "NEPs: " << std::setw(12) << 1e-12 * std::sqrt(NEPs * totalBolometersNumber) << SEP
-                << "NEPt: " << std::setw(12) << 1e-12 * NEP << std::endl;
+    if (resultStruct.error_code != 0) {
+        throw std::runtime_error(resultStruct.error_message);
     }
 
-    file_Noise.close();
-    file_Te.close();
-    file_NEP.close();
-    file_G.close();
+    // Copy results from CEBResult to member variables
+    for (size_t i = 0; i < resultStruct.Inum.array_size; ++i) {
+        Inum[i] = resultStruct.Inum.data[i];
+        Vnum[i] = resultStruct.Vnum.data[i];
+    }
+
+    // Store detailed results for file writing if available
+    if (resultStruct.Te.data != nullptr && resultStruct.Te.array_size > 0) {
+        detailed_I.assign(resultStruct.I.data, resultStruct.I.data + resultStruct.I.array_size);
+        detailed_I_A.assign(resultStruct.I_A.data, resultStruct.I_A.data + resultStruct.I_A.array_size);
+        detailed_Te.assign(resultStruct.Te.data, resultStruct.Te.data + resultStruct.Te.array_size);
+        detailed_Tsin.assign(resultStruct.Tsin.data, resultStruct.Tsin.data + resultStruct.Tsin.array_size);
+        detailed_DeltaT.assign(resultStruct.DeltaT.data, resultStruct.DeltaT.data + resultStruct.DeltaT.array_size);
+        detailed_Pe_ph.assign(resultStruct.Pe_ph.data, resultStruct.Pe_ph.data + resultStruct.Pe_ph.array_size);
+        detailed_Pand.assign(resultStruct.Pand.data, resultStruct.Pand.data + resultStruct.Pand.array_size);
+        detailed_Pleak.assign(resultStruct.Pleak.data, resultStruct.Pleak.data + resultStruct.Pleak.array_size);
+        detailed_Pabs.assign(resultStruct.Pabs.data, resultStruct.Pabs.data + resultStruct.Pabs.array_size);
+        detailed_Pcool.assign(resultStruct.Pcool.data, resultStruct.Pcool.data + resultStruct.Pcool.array_size);
+        detailed_NEPe_ph2.assign(resultStruct.NEPe_ph2.data, resultStruct.NEPe_ph2.data + resultStruct.NEPe_ph2.array_size);
+        detailed_NEPs.assign(resultStruct.NEPs.data, resultStruct.NEPs.data + resultStruct.NEPs.array_size);
+        detailed_NoiseA.assign(resultStruct.NoiA.data, resultStruct.NoiA.data + resultStruct.NoiA.array_size);
+        detailed_NEPph.assign(resultStruct.NEPph.data, resultStruct.NEPph.data + resultStruct.NEPph.array_size);
+        detailed_NEP.assign(resultStruct.NEP.data, resultStruct.NEP.data + resultStruct.NEP.array_size);
+        detailed_Sv.assign(resultStruct.Sv.data, resultStruct.Sv.data + resultStruct.Sv.array_size);
+        detailed_G_e.assign(resultStruct.G_e.data, resultStruct.G_e.data + resultStruct.G_e.array_size);
+        detailed_G_NIS.assign(resultStruct.G_NIS.data, resultStruct.G_NIS.data + resultStruct.G_NIS.array_size);
+    }
 
     std::clog
             << "Time spent: " << std::chrono::duration<double>(std::chrono::steady_clock::now() - start)
             << std::endl;
 
+    // Write output files with detailed results
+    writeOutputFiles(resultStruct, bolometersInSeries, bolometersInParallel);
+
     return voltageStepsCount - 1;
+}
+
+void IVParamFitter::set_output_dir(const std::string& output_directory) {
+    output_dir = output_directory;
+}
+
+void IVParamFitter::writeOutputFiles(const CEBResult& result, 
+                                   const double bolometersInSeries, 
+                                   const double bolometersInParallel) {
+    // Create output directory if it doesn't exist
+    std::filesystem::path out_dir(output_dir);
+    std::filesystem::create_directories(out_dir);
+    
+    const double total_bolometers = bolometersInSeries * bolometersInParallel;
+    
+    // Check if detailed data is available
+    if (result.Te.data != nullptr && result.Te.array_size > 0) {
+        // Backup existing Te.txt if it exists
+        std::filesystem::path te_path = out_dir / "Te.txt";
+        if (std::filesystem::exists(te_path)) {
+            auto timestamp = std::chrono::system_clock::now();
+            std::time_t timestamp_time = std::chrono::system_clock::to_time_t(timestamp);
+            std::stringstream backup_filename;
+            backup_filename << te_path.string() << "_" << std::put_time(std::localtime(&timestamp_time), "%Y%m%d%H%M%S") << ".txt";
+            std::filesystem::rename(te_path, backup_filename.str());
+        }
+        
+        // Open output files
+        std::ofstream file_noise(out_dir / "Noise.txt");
+        std::ofstream file_Te(te_path);
+        std::ofstream file_NEP(out_dir / "NEP.txt");
+        std::ofstream file_G(out_dir / "G.txt");
+        
+        // Write headers
+        file_noise << std::fixed << std::setprecision(6);
+        file_Te << std::fixed << std::setprecision(6);
+        file_NEP << std::fixed << std::setprecision(6);
+        file_G << std::fixed << std::setprecision(6);
+        
+        file_noise << "Voltage\tNOISEep\tNOISEs\tNOISEa\tNOISE\tNOISEph\tNOISE^2-NOISEph^2\n";
+        file_Te << "Voltage\tCurrent\tIqp\tIand\tV/Rleak\tTe\tTs\tDeltaT\tPeph\tPand\tPleak\tPabs\tPcool\n";
+        file_NEP << "Voltage\tCurrent\tNEPeph\tNEPs\tNEPa\tNEP\tNEPph\tSv\tNEP^2-NEPph^2\n";
+        file_G << "Voltage\tGe\tGnis\n";
+        
+        // Write data rows
+        for (size_t i = 0; i < result.Te.array_size; ++i) {
+            // Write Te file
+            file_Te << Vnum[i] << "\t" << Inum[i] << "\t"
+                    << 1e-9 * result.I.data[i] * bolometersInParallel << "\t" << 1e-9 * result.I_A.data[i] * bolometersInParallel << "\t"
+                    << 1e9 * (result.I.data[i] / par["Rleak"]) * bolometersInParallel << "\t" << result.Te.data[i] << "\t" << result.Tsin.data[i] << "\t"
+                    << result.DeltaT.data[i] << "\t" << result.Pe_ph.data[i] << "\t" << result.Pand.data[i] << "\t"
+                    << result.Pleak.data[i] << "\t" << result.Pabs.data[i] << "\t" << result.Pcool.data[i] << "\n";
+            
+            // Write Noise file
+            file_noise << (2.0 * result.I.data[i] + 1e-9 * result.I.data[i] * par["Ra"]) * bolometersInSeries << "\t"
+                      << 1e9 * std::sqrt(result.NEPe_ph2.data[i] * total_bolometers) * std::abs(result.Sv.data[i]) << "\t"
+                      << 1e9 * std::sqrt(result.NEPs.data[i] * total_bolometers) * std::abs(result.Sv.data[i]) << "\t"
+                      << 1e9 * std::sqrt(result.NoiA.data[i]) << "\t" << 1e9 * result.NEP.data[i] * std::abs(result.Sv.data[i]) << "\t"
+                      << 1e9 * result.NEPph.data[i] * std::abs(result.Sv.data[i]) << "\t"
+                      << 1e9 * std::abs(result.Sv.data[i]) * std::sqrt(std::pow(result.NEP.data[i], 2) - std::pow(result.NEPph.data[i], 2)) << "\n";
+            
+            // Write NEP file
+            file_NEP << (2.0 * result.I.data[i] + 1e-9 * result.I.data[i] * par["Ra"]) * bolometersInSeries << "\t"
+                     << 1e-9 * result.I.data[i] * bolometersInParallel << "\t" << 1e-12 * std::sqrt(result.NEPe_ph2.data[i] * total_bolometers) << "\t"
+                     << 1e-12 * std::sqrt(result.NEPs.data[i] * total_bolometers) << "\t" << 1e-12 * std::sqrt(result.NoiA.data[i]) << "\t"
+                     << 1e-12 * result.NEP.data[i] << "\t" << 1e-12 * result.NEPph.data[i] << "\t" << 1e12 * std::abs(result.Sv.data[i]) << "\t"
+                     << 1e-12 * std::sqrt(std::pow(result.NEP.data[i], 2) - std::pow(result.NEPph.data[i], 2)) << "\n";
+            
+            // Write G file
+            file_G << (2.0 * result.I.data[i] + 1e-9 * result.I.data[i] * par["Ra"]) * bolometersInSeries << "\t"
+                    << result.G_e.data[i] << "\t" << result.G_NIS.data[i] << "\n";
+        }
+        
+        file_noise.close();
+        file_Te.close();
+        file_NEP.close();
+        file_G.close();
+    } else {
+        // Create minimal output files if detailed data not available
+        std::clog << "Warning: Detailed result data not available, writing minimal output files\n";
+        
+        std::ofstream file_Te(out_dir / "Te.txt");
+        file_Te << "Voltage\tCurrent\n";
+        for (size_t i = 0; i < static_cast<size_t>(Vnum.size()); ++i) {
+            file_Te << Vnum[i] << "\t" << Inum[i] << "\n";
+        }
+        file_Te.close();
+        
+        std::ofstream file_noise(out_dir / "Noise.txt");
+        file_noise << "Voltage\tNOISE\n";
+        for (size_t i = 0; i < static_cast<size_t>(Vnum.size()); ++i) {
+            file_noise << Vnum[i] << "\t0.0\n";
+        }
+        file_noise.close();
+        
+        std::ofstream file_NEP(out_dir / "NEP.txt");
+        file_NEP << "Voltage\tNEP\n";
+        for (size_t i = 0; i < static_cast<size_t>(Vnum.size()); ++i) {
+            file_NEP << Vnum[i] << "\t0.0\n";
+        }
+        file_NEP.close();
+        
+        std::ofstream file_G(out_dir / "G.txt");
+        file_G << "Voltage\tG\n";
+        for (size_t i = 0; i < static_cast<size_t>(Vnum.size()); ++i) {
+            file_G << Vnum[i] << "\t0.0\n";
+        }
+        file_G.close();
+    }
 }

@@ -1,0 +1,3 @@
+cd /c/work/sc/ceb_iv_fit
+cmake -DCMAKE_BUILD_TYPE:STRING=Release -DCMAKE_EXPORT_COMPILE_COMMANDS:BOOL=TRUE -DCMAKE_C_COMPILER:FILEPATH="C:\msys64\ucrt64\bin\gcc.exe" -DCMAKE_CXX_COMPILER:FILEPATH="C:\msys64\ucrt64\bin\g++.exe" --no-warn-unused-cli -S /c/work/sci/ceb_iv_fit -B /c/work/sci/ceb_iv_fit/build -G "MinGW Makefiles"
+cmake --build build -j`nproc`

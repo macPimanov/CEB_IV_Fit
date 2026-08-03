@@ -31,7 +31,7 @@ double current(const ScalarLike& v, const double tau) {
     // [delta(0) / eRn]
     return s * std::sqrt(2.0 * M_PI * a1 / a2 + a3)
            * (1.0 / (2.0 * std::exp((1.0 - v) / tau) + 1.0)
-              + 1.0 / (2.0 * std::exp((1.0 + v) / tau) + 1.0));
+              - 1.0 / (2.0 * std::exp((1.0 + v) / tau) + 1.0));
 }
 
 template<class ScalarLike>
@@ -57,7 +57,7 @@ double currentIntegral(const double DT, const ScalarLike& v, const double tau, c
 
     double x = DT + dx; // energy
     while (x <= inf) {
-        constexpr double accuracy = 1e-6;
+        constexpr double accuracy = 1e-15;
         const double a2 = std::sqrt(std::pow(x, 2) - DT2);
         ScalarLike a0;
         double a1;
@@ -124,10 +124,11 @@ double PowerCool(const ScalarLike& v, const double tau, const double tauE) {
 }
 
 template<class ScalarLike>
-ScalarLike AndCurrent(const double DT, const ScalarLike& v, const double tauE, const double Wt, const double tm) {
+ScalarLike AndCurrent(const double ii, const double DT, const ScalarLike& v, const double tauE, const double Wt, const double tm) {
     /*
      *  Compute the Andreev current using exact integral, rectangle method
      *
+     *  `ii` is the scaling coefficient for the returned current value
      *  `DT` is delta (energy gap),
      *  `v` is voltage,
      *  `tauE` is for electron temperature,
@@ -135,6 +136,9 @@ ScalarLike AndCurrent(const double DT, const ScalarLike& v, const double tauE, c
      *  `tm` is for the depairing energy
      */
 
+    if (ii == 0.0) {
+        return 0.0;
+    }
     const double dx = INTEGRATION_SCALE * DT;
     const double DT2 = std::pow(DT, 2);
     const double twoWt = 2.0 * Wt;
@@ -153,7 +157,7 @@ ScalarLike AndCurrent(const double DT, const ScalarLike& v, const double tauE, c
         x += dx;
     }
     i *= dx;
-    return i;
+    return i * ii;
 }
 
 template<class ScalarLike>
