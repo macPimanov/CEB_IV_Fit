@@ -590,7 +590,7 @@ class IVParamFitter:
                 current_value = self.par[param_name]
                 
                 def objective(param_value: float) -> float:
-                    return self(param_value, param_name)
+                    return self._sequential_fit_objective(param_value, param_name)
                 
                 lower_bound = 0.5 * current_value
                 upper_bound = 2.0 * current_value
@@ -651,6 +651,22 @@ class IVParamFitter:
         self._update_display(self.Irex, self.Vrex)
         
         return (self.Inum - self.Irex) / (self.Irex * len(self.Irex))
+
+    def _sequential_fit_objective(self, param_value: float, param_name: str) -> float:
+        old_value = self.par[param_name]
+        self.par[param_name] = param_value
+
+        self.compute_ceb_properties()
+        Irex, Vrex = Utils.resample(self.Iexp, self.Vexp, self.Inum, self.Vnum)
+
+        result = Utils.chi_sq_der(self.Vnum, self.Inum, Irex)
+
+        # Update display if enabled
+        self.eval_count += 1
+        self._update_display(Irex, Vrex)
+
+        self.par[param_name] = old_value
+        return result
 
     def lmfit_sequential_fit(self, run_count: int = 3) -> None:
         """Perform sequential fitting using lmfit"""

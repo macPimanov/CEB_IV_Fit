@@ -32,9 +32,7 @@ setup(
     entry_points={
         'console_scripts': [
             'ceb-fit=main:main',
-            'ceb-verify=verify_implementation:main',
             'ceb-convert=convert_config:main',
-            'ceb-test=test_implementation:main',
         ],
     },
     classifiers=[

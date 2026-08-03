@@ -23,33 +23,3 @@ class PhysicsConstants:
             'OPA1641': {'voltage_noise': 5.1e-9, 'current_noise': 0.8e-15},
         }
         return amplifiers.get(amp_type, amplifiers['AD745'])
-
-class Configuration:
-    data_file: str
-    amp_type: str
-    sep: str
-    threads: int
-    
-    def __init__(self, config_file: Optional[str] = None) -> None:
-        self.data_file = "SPC-CEB_300mK_Triton11-2026.txt"
-        self.amp_type = 'AD745'
-        self.sep = '\t'
-        self.threads = 56
-        
-        if config_file:
-            self.load_from_json(config_file)
-    
-    def load_from_json(self, config_file: str) -> None:
-        import json
-        with open(config_file, 'r') as f:
-            config = json.load(f)
-        
-        for key, value in config.items():
-            setattr(self, key, value)
-    
-    def to_json(self, config_file: str) -> None:
-        import json
-        config_dict = {key: value for key, value in vars(self).items() 
-                      if not key.startswith('_')}
-        with open(config_file, 'w') as f:
-            json.dump(config_dict, f, indent=4)
