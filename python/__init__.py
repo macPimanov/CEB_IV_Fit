@@ -5,7 +5,7 @@ from .iv_param_fitter import IVParamFitter
 from .utils import Utils
 from .ceb_numeric_model import CEBNumericModel
 from .minimization import MinimizationAlgorithms
-from .constants import PhysicsConstants, Configuration
+from .constants import PhysicsConstants
 
 __all__ = [
     'IVParamFitter',
@@ -13,5 +13,4 @@ __all__ = [
     'CEBNumericModel',
     'MinimizationAlgorithms',
     'PhysicsConstants',
-    'Configuration'
 ]
