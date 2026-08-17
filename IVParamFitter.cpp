@@ -282,7 +282,7 @@ size_t IVParamFitter::computeCEBProperties() {
     }
 
     std::clog
-            << "Time spent: " << std::chrono::duration<double>(std::chrono::steady_clock::now() - start)
+            << "Time spent calculating IV curve: " << std::chrono::duration<double>(std::chrono::steady_clock::now() - start)
             << std::endl;
 
     // Write output files with detailed results

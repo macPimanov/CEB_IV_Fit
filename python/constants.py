@@ -1,6 +1,5 @@
-import numpy as np
 from scipy.constants import e, h, k, pi
-from typing import Dict, Any, Optional
+from typing import Dict
 
 class PhysicsConstants:
     ME: float = 9.1093837015e-31
