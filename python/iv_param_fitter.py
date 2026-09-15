@@ -646,6 +646,7 @@ class IVParamFitter:
             if self._num_iterations is not None:
                 print(f"Iteration {self.eval_count}/{self._num_iterations}: fmin {Utils.chi_sq(self.Inum, self.Irex)}")
             print(f"{name}: {params[name].value}")
+        print(f"Current chi-sq: {Utils.chi_sq(self.Inum, self.Irex)}")
         print()
 
         self._update_display(self.Irex, self.Vrex)
@@ -668,7 +669,7 @@ class IVParamFitter:
         self.par[param_name] = old_value
         return result
 
-    def lmfit_sequential_fit(self, run_count: int = 3) -> None:
+    def lmfit_sequential_fit(self, run_count: int = 3, method: str = 'leastsq') -> None:
         """Perform sequential fitting using lmfit"""
         self._init_brute_params()
         import random
@@ -691,7 +692,7 @@ class IVParamFitter:
                           max=2.0 * self.par[name] if run != 0 else self.maxs[name])
             
             self._num_iterations = None
-            result = lmfit_minimize(self._lmfit_objective, params, args=(par_seq,))
+            result = lmfit_minimize(self._lmfit_objective, params, method=method, args=(par_seq,))
             
             fmin = result.chisqr
             nfev = result.nfev

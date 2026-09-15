@@ -19,7 +19,7 @@ def main() -> int:
                        help='Path to JSON configuration file')
     parser.add_argument('--data', type=str, 
                        help='Path to experimental data file (overrides config)')
-    parser.add_argument('--method', type=str, choices=['golden', 'lmfit'], default='golden',
+    parser.add_argument('--method', type=str, default='lmfit',
                        help='Fitting method to use')
     parser.add_argument('--runs', type=int, default=3,
                        help='Number of fitting runs')
@@ -89,7 +89,7 @@ def main() -> int:
         if args.method == 'golden':
             fitter.sequential_fit(run_count=args.runs)
         else:  # lmfit
-            fitter.lmfit_sequential_fit(run_count=args.runs)
+            fitter.lmfit_sequential_fit(run_count=args.runs, method=args.method)
         
         # Save final parameters
         final_config_file = os.path.join(output_dir, args.config.replace('.json', '_fitted.json'))

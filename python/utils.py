@@ -7,7 +7,7 @@ class Utils:
     @staticmethod
     def load_experimental_data(filename: Union[str, Path], remove_offset: bool = False) -> Tuple[np.ndarray, np.ndarray]:
         try:
-            data = np.loadtxt(filename, delimiter='\t')
+            data = np.loadtxt(filename, delimiter=' ')
             if data.ndim == 1:
                 data = data.reshape(-1, 2)
             Vexp = data[:, 0]
