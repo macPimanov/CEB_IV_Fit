@@ -6,6 +6,7 @@ from .constants import PhysicsConstants
 from .ceb_numeric_model import CEBNumericModel
 from .utils import Utils
 from .minimization import MinimizationAlgorithms
+from .golubev import I as golubev_current
 
 try:
     from .ceb_bindings import compute_ceb_properties_threaded
@@ -23,6 +24,8 @@ class IVParamFitter:
         self.Vnum = None
         self.Irex = None
         self.Vrex = None
+        self.Te_num = None
+        self.Igol = None
         self.par = {}
         self.to_fit = {}
         self.mins = {}
@@ -39,10 +42,16 @@ class IVParamFitter:
         self.fig = None
         self.ax = None
         self.ax_lin = None
+        self.ax_res_num = None
+        self.ax_res_gol = None
         self.line_exp = None
         self.line_num = None
+        self.line_gol = None
         self.line_exp_lin = None
         self.line_num_lin = None
+        self.line_gol_lin = None
+        self.line_res_num = None
+        self.line_res_gol = None
         self.eval_count = 0
         
         if self.display:
@@ -76,11 +85,12 @@ class IVParamFitter:
                 self.ax_lin = None
                 return
             
-            self.fig, (self.ax, self.ax_lin) = plt.subplots(1, 2, figsize=(14, 6))
+            self.fig, ((self.ax, self.ax_lin), (self.ax_res_num, self.ax_res_gol)) = plt.subplots(2, 2, figsize=(14, 10))
             
-            # Setup log scale subplot (left)
+            # Setup log scale subplot (top-left)
             self.line_exp, = self.ax.plot([], [], 'bo-', label='Experimental', markersize=4, alpha=0.7)
             self.line_num, = self.ax.plot([], [], 'r-', label='Numerical Fit', linewidth=2)
+            self.line_gol, = self.ax.plot([], [], 'g--', label='Golubev Fit', linewidth=2)
             self.ax.set_xlabel('Voltage (V)', fontsize=12)
             self.ax.set_ylabel('Current (A)', fontsize=12)
             self.ax.set_yscale('log')
@@ -89,17 +99,39 @@ class IVParamFitter:
             self.ax.grid(True, alpha=0.3)
             self.ax.tick_params(labelsize=10)
             
-            # Setup linear scale subplot (right)
+            # Setup linear scale subplot (top-right)
             self.line_exp_lin, = self.ax_lin.plot([], [], 'bo-', label='Experimental', markersize=4, alpha=0.7)
             self.line_num_lin, = self.ax_lin.plot([], [], 'r-', label='Numerical Fit', linewidth=2)
+            self.line_gol_lin, = self.ax_lin.plot([], [], 'g--', label='Golubev Fit', linewidth=2)
             self.ax_lin.set_xlabel('Voltage (V)', fontsize=12)
             self.ax_lin.set_ylabel('Current (A)', fontsize=12)
             self.ax_lin.set_title('IV Curve Fitting Progress (Linear Scale)', fontsize=12, fontweight='bold')
             self.ax_lin.legend(fontsize=10)
             self.ax_lin.grid(True, alpha=0.3)
             self.ax_lin.tick_params(labelsize=10)
+            
+            # Setup numerical residual subplot (bottom-left)
+            self.line_res_num, = self.ax_res_num.plot([], [], 'r-', label='Numerical Residual', linewidth=2)
+            self.ax_res_num.axhline(0.0, color='k', linestyle=':', linewidth=1)
+            self.ax_res_num.set_xlabel('Voltage (V)', fontsize=12)
+            self.ax_res_num.set_ylabel('(I_num - I_exp) / I_exp', fontsize=12)
+            self.ax_res_num.set_title('Numerical Fit Residual', fontsize=12, fontweight='bold')
+            self.ax_res_num.legend(fontsize=10)
+            self.ax_res_num.grid(True, alpha=0.3)
+            self.ax_res_num.tick_params(labelsize=10)
+            
+            # Setup Golubev residual subplot (bottom-right)
+            self.line_res_gol, = self.ax_res_gol.plot([], [], 'g--', label='Golubev Residual', linewidth=2)
+            self.ax_res_gol.axhline(0.0, color='k', linestyle=':', linewidth=1)
+            self.ax_res_gol.set_xlabel('Voltage (V)', fontsize=12)
+            self.ax_res_gol.set_ylabel('(I_gol - I_exp) / I_exp', fontsize=12)
+            self.ax_res_gol.set_title('Golubev Fit Residual', fontsize=12, fontweight='bold')
+            self.ax_res_gol.legend(fontsize=10)
+            self.ax_res_gol.grid(True, alpha=0.3)
+            self.ax_res_gol.tick_params(labelsize=10)
             plt.ion()  # Turn on interactive mode
             plt.tight_layout()
+            plt.show(block=False)  # Show the window once, without grabbing focus on refresh
             
             # Store reference to pyplot for later use
             self.plt = plt
@@ -128,20 +160,34 @@ class IVParamFitter:
             return
         
         try:
+            # Compute Golubev current for display (best effort; None -> empty)
+            self.compute_golubev_current()
+            Igol = self.Igol if self.Igol is not None else np.zeros_like(self.Inum)
+            
             # Calculate chi-squared for display
             chi_sq = Utils.chi_sq(self.Inum, Irex)
+            chi_sq_gol = Utils.chi_sq_golubev(Igol, Irex) if self.Igol is not None else float('nan')
             
-            # Update data - log scale (left subplot)
+            # Update data - log scale (top-left subplot)
             self.line_exp.set_data(Vrex, Irex)
             self.line_num.set_data(self.Vnum, self.Inum)
+            self.line_gol.set_data(self.Vnum, Igol)
             
-            # Update data - linear scale (right subplot)
+            # Update data - linear scale (top-right subplot)
             self.line_exp_lin.set_data(Vrex, Irex)
             self.line_num_lin.set_data(self.Vnum, self.Inum)
+            self.line_gol_lin.set_data(self.Vnum, Igol)
+            
+            # Update data - residual subplots
+            with np.errstate(divide='ignore', invalid='ignore'):
+                res_num = (self.Inum - Irex) / Irex
+                res_gol = (Igol - Irex) / Irex
+            self.line_res_num.set_data(self.Vnum, res_num)
+            self.line_res_gol.set_data(self.Vnum, res_gol)
             
             # Update axis limits - log scale
             all_v = np.concatenate([Vrex, self.Vnum])
-            all_i = np.concatenate([Irex, self.Inum])
+            all_i = np.concatenate([Irex, self.Inum, Igol])
             
             self.ax.set_xlim(np.min(all_v) * 0.95, np.max(all_v) * 1.05)
             self.ax.set_ylim(np.min(all_i) * 0.95, np.max(all_i) * 1.05)
@@ -150,11 +196,28 @@ class IVParamFitter:
             self.ax_lin.set_xlim(np.min(all_v) * 0.95, np.max(all_v) * 1.05)
             self.ax_lin.set_ylim(np.min(all_i) * 0.95, np.max(all_i) * 1.05)
             
-            # Update plot with chi-squared info - both subplots
-            title = f'Evals: {self.eval_count} | χ²: {chi_sq:.6e}'
+            # Update axis limits - residual subplots
+            fin_v = np.isfinite(res_num) & np.isfinite(res_gol)
+            if np.any(fin_v):
+                res_min = np.min(np.concatenate([res_num[fin_v], res_gol[fin_v]]))
+                res_max = np.max(np.concatenate([res_num[fin_v], res_gol[fin_v]]))
+            else:
+                res_min, res_max = -1.0, 1.0
+            pad = (res_max - res_min) * 0.05
+            self.ax_res_num.set_xlim(np.min(all_v) * 0.95, np.max(all_v) * 1.05)
+            self.ax_res_num.set_ylim(res_min - pad, res_max + pad)
+            self.ax_res_gol.set_xlim(np.min(all_v) * 0.95, np.max(all_v) * 1.05)
+            self.ax_res_gol.set_ylim(res_min - pad, res_max + pad)
+            
+            # Update plot with chi-squared info - all subplots
+            title = f'Evals: {self.eval_count} | χ²(num): {chi_sq:.3e} | χ²(gol): {chi_sq_gol:.3e}'
             self.ax.set_title(f'IV Curve Fitting Progress (Log Scale)\n{title}', fontsize=12, fontweight='bold')
             self.ax_lin.set_title(f'IV Curve Fitting Progress (Linear Scale)\n{title}', fontsize=12, fontweight='bold')
-            self.plt.pause(0.001)  # Small pause to allow GUI update
+            
+            # Redraw in the GUI event loop without raising the window or blocking.
+            # figure.show(idle=True) is used so repaints never steal focus.
+            self.fig.canvas.draw_idle()
+            self.fig.canvas.flush_events()
             
         except Exception as e:
             print(f"Error updating display: {e}")
@@ -310,6 +373,7 @@ class IVParamFitter:
         
         self.Inum = np.zeros(voltage_steps - 1)
         self.Vnum = np.zeros(voltage_steps - 1)
+        self.Te_num = np.zeros(voltage_steps - 1)
         
         # Open output files in the output directory
         file_noise = open(self.output_dir / 'Noise.txt', 'w')
@@ -357,6 +421,8 @@ class IVParamFitter:
             
             Te = tauE * Delta
             
+            self.Te_num[voltage_step - 1] = Te
+
             self.Inum[voltage_step - 1] = 1e-9 * (I[voltage_step] + I_A[voltage_step]) * MP
             self.Vnum[voltage_step - 1] = (self.constants.NUMBER_OF_SINS_IN_CEB * V[voltage_step] + 1e-9 * (I[voltage_step] + I_A[voltage_step]) * Ra) * M
             
@@ -468,6 +534,7 @@ class IVParamFitter:
         # Store results in the IVParamFitter instance
         self.Inum = result['Inum']
         self.Vnum = result['Vnum']
+        self.Te_num = result.get('Te')
         
         # Write output files from result data
         self._write_output_files(result, params)
@@ -573,6 +640,38 @@ class IVParamFitter:
         self.Irex, self.Vrex = Utils.resample(self.Iexp, self.Vexp, self.Vnum)
         return self.Irex, self.Vrex
     
+    def compute_golubev_current(self) -> np.ndarray:
+        """Compute the analytical Golubev SINIS current for the last computed state.
+
+        Each SIN junction is modelled with the gap/current scale derived from the main
+        parameters (par['Rn'], par['Ra'], par['Tc'], par['M'], par['MP']) so that the
+        resulting current is directly comparable to the resampled experimental current
+        on the same voltage grid. Returns None (and skips the extra term) when not
+        computable, e.g. the detailed electron temperature is unavailable.
+        """
+        if self.Vnum is None or self.Inum is None or self.Te_num is None:
+            self.Igol = None
+            return None
+        
+        M = float(self.par['M'])
+        MP = float(self.par['MP'])
+        Ra = self.par['Ra']
+        
+        # Normal resistance of a single SIN junction (per-bolometer minus absorber,
+        # split over the SINs of one bolometer), same decomposition as the numeric model.
+        Rn_bolo = self.par['Rn'] * MP / M
+        Rsin = (Rn_bolo - Ra) / self.constants.NUMBER_OF_SINS_IN_CEB
+        
+        # Superconducting gap energy in Joules (the model computes it in Kelvin).
+        Delta_j = self.constants.BCS_INTEGRAL * self.par['Tc'] * self.constants.K * self.constants.E
+        
+        # Voltage across a single SIN junction: per-bolometer voltage minus the small
+        # absorber drop, divided over the SINs of one bolometer.
+        Vsin = (self.Vnum / M - (self.Inum / MP) * Ra) / self.constants.NUMBER_OF_SINS_IN_CEB
+        
+        self.Igol = MP * golubev_current(Vsin, self.Te_num, Rsin, Delta_j)
+        return self.Igol
+    
     def sequential_fit(self, run_count: int = 3) -> None:
         """Perform sequential fitting using golden section method"""
         import random
@@ -651,7 +750,13 @@ class IVParamFitter:
 
         self._update_display(self.Irex, self.Vrex)
         
-        return (self.Inum - self.Irex) / (self.Irex * len(self.Irex))
+        residual = (self.Inum - self.Irex) / (self.Irex * len(self.Irex))
+        if self.compute_golubev_current() is not None:
+            residual = np.concatenate([
+                residual,
+                (self.Igol - self.Irex) / (self.Irex * len(self.Irex))
+            ])
+        return residual
 
     def _sequential_fit_objective(self, param_value: float, param_name: str) -> float:
         old_value = self.par[param_name]
@@ -665,6 +770,9 @@ class IVParamFitter:
         # Update display if enabled
         self.eval_count += 1
         self._update_display(Irex, Vrex)
+
+        if self.compute_golubev_current() is not None:
+            result = result + Utils.chi_sq_golubev(self.Igol, Irex)
 
         self.par[param_name] = old_value
         return result
@@ -720,7 +828,10 @@ class IVParamFitter:
         if self.Inum is None or self.Vnum is None:
             self.compute_ceb_properties()
             self.resample()
-        return Utils.chi_sq_der(self.Vnum, self.Inum, self.Irex)
+        result = Utils.chi_sq_der(self.Vnum, self.Inum, self.Irex)
+        if self.compute_golubev_current() is not None:
+            result = result + Utils.chi_sq_golubev(self.Igol, self.Irex)
+        return result
     
     def _save_fit_results(self, fmin: float) -> None:
         fitparams_path = self.output_dir / 'fitparameters_new.txt'
